@@ -1,4 +1,5 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
+from src.drone import Objective as DroneObjective
 from typing import Literal
 from enum import Enum
 
@@ -37,7 +38,9 @@ class MissionEvent(BaseModel):
 
 
 class MissionPlan(BaseModel):
-    plan: dict[str, list[tuple[int, int]]]
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    plan: dict[str, list[tuple[int, int]] | DroneObjective]
 
 
 class Action(BaseModel):
@@ -51,6 +54,7 @@ class MissionState(BaseModel):
     no_fly_zones: list[Region]
     discovered_targets: list[Target]
     events: list[MissionEvent]
+    explored_cells: set[tuple[int, int]]
 
     current_plan: MissionPlan | None
     proposed_action: Action | None

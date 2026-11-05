@@ -1,6 +1,6 @@
 from typing import TypedDict
 
-from models import DroneState
+from src.models import DroneState
 
 
 class DroneInitialState(TypedDict):

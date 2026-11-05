@@ -1,6 +1,6 @@
 from heapq import heappop, heappush
 
-from map import Terrain
+from src.map import Terrain
 
 
 def astar(
