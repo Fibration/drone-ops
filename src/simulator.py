@@ -1,6 +1,6 @@
 from src.drone import DroneController, ObjectiveType
 from src.models import DroneState
-from src.map import Terrain
+from src.map import Terrain, no_fly_zone_from_event
 from src.parameters import sensor_range, monitoring_interval
 
 
@@ -10,14 +10,21 @@ class Simulator:
         map: list[list[Terrain]],
         drones: dict[str, DroneState],
         targets: list[tuple[int, int]],
+        scenario: dict[int, str] = {},
     ):
         self.map = map
         self.drones = drones
         self.event = None
         self.timestep = 0
         self.targets = targets
+        self.scenario = scenario
 
-    def execute_plan(self, plan, monitoring_checks, explored_cells=None):
+    def execute_plan(
+        self,
+        plan,
+        monitoring_checks,
+        explored_cells: set[tuple[int, int]] | None = None,
+    ) -> tuple[str, dict[str, DroneState], set[tuple[int, int]], int]:
         self.event = None
         if explored_cells is None:
             explored_cells = set()
@@ -54,6 +61,23 @@ class Simulator:
 
             self.timestep += 1
             monitor = self.timestep % monitoring_interval == 0
+            if self.timestep in self.scenario:
+                self.event = self.scenario[self.timestep]
+                zone = no_fly_zone_from_event(self.event)
+                if zone is not None:
+                    if any(
+                        row >= len(self.map) or col >= len(self.map[row])
+                        for row, col in zone
+                    ):
+                        raise ValueError("No-fly zone must be within the terrain map")
+                    for row, col in zone:
+                        self.map[row][col] = Terrain.NO_FLY_ZONE
+                return (
+                    self.event,
+                    self.drones,
+                    explored_cells,
+                    self.timestep,
+                )
 
             for drone_id, step in actions.items():
                 drone = self.drones[drone_id]
@@ -131,11 +155,15 @@ class Simulator:
                             break
 
                     if monitor:
-                        if drone.battery < monitoring_checks["battery_reserve_threshold"]:
+                        if (
+                            drone.battery
+                            < monitoring_checks["battery_reserve_threshold"]
+                        ):
                             self.event = f"Drone {drone_id} battery low {drone.battery} at {drone.position}"
                             break
                         elif drone.comms is False:
                             self.event = f"Drone {drone_id} lost communication at {drone.position}"
                             break
 
+        assert self.event is not None
         return self.event, self.drones, explored_cells, self.timestep

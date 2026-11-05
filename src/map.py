@@ -1,4 +1,22 @@
 from enum import Enum
+import re
+
+
+def no_fly_zone_from_event(description: str) -> list[tuple[int, int]] | None:
+    match = re.fullmatch(
+        r"New no-fly zone added: rows (\d+)-(\d+), columns (\d+)-(\d+)",
+        description,
+    )
+    if match is None:
+        return None
+    top, bottom, left, right = map(int, match.groups())
+    if top > bottom or left > right:
+        raise ValueError("No-fly zone bounds must be in ascending order")
+    return [
+        (row, col)
+        for row in range(top, bottom + 1)
+        for col in range(left, right + 1)
+    ]
 
 
 class Terrain(Enum):
