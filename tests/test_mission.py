@@ -25,13 +25,15 @@ class MissionIntegrationTest(unittest.TestCase):
             simulator,
             terrain,
             drones,
-            mission_commander=commander,
+            mission_team=commander,
             monitoring_checks={"battery_reserve_threshold": 10.0},
         )
 
         self.assertEqual(result.mission_status, MissionStatus.SUCCESS)
         self.assertEqual(result.events[-1].description, "Mission plan exhausted")
-        self.assertIn((1, 7), [target.position for target in result.discovered_targets.values()])
+        self.assertIn(
+            (1, 7), [target.position for target in result.discovered_targets.values()]
+        )
         self.assertEqual(len(result.discovered_targets), 1)
         self.assertTrue(
             any(
@@ -50,9 +52,7 @@ class MissionIntegrationTest(unittest.TestCase):
         )
         zone = {(row, col) for row in (3, 4) for col in range(4, 9)}
         zone_event = "New no-fly zone added: rows 3-4, columns 4-8"
-        simulator = Simulator(
-            truth, drones, targets=[(1, 7)], scenario={5: zone_event}
-        )
+        simulator = Simulator(truth, drones, targets=[(1, 7)], scenario={5: zone_event})
         zone_added = False
 
         def commander(state):
@@ -72,28 +72,36 @@ class MissionIntegrationTest(unittest.TestCase):
             result = naive_mission_commander(state)
             if zone_added:
                 known_zones = {
-                    cell for region in result.no_fly_zones for cell in region.coordinates
+                    cell
+                    for region in result.no_fly_zones
+                    for cell in region.coordinates
                 }
-                self.assertTrue(zone <= known_zones, "Commander did not record the new zone")
+                self.assertTrue(
+                    zone <= known_zones, "Commander did not record the new zone"
+                )
             return result
 
         result = mission(
             simulator,
             terrain,
             drones,
-            mission_commander=commander,
+            mission_team=commander,
             monitoring_checks={"battery_reserve_threshold": 10.0},
         )
 
         self.assertTrue(zone_added, "Mission never reached the scenario event")
         self.assertEqual(result.mission_status, MissionStatus.SUCCESS)
         self.assertEqual(result.events[-1].description, "Mission plan exhausted")
-        self.assertIn((1, 7), [target.position for target in result.discovered_targets.values()])
+        self.assertIn(
+            (1, 7), [target.position for target in result.discovered_targets.values()]
+        )
         self.assertEqual(len(result.discovered_targets), 1)
-        self.assertTrue(any(
-            "reached the target at (1, 7)" in event.description
-            for event in result.events
-        ))
+        self.assertTrue(
+            any(
+                "reached the target at (1, 7)" in event.description
+                for event in result.events
+            )
+        )
         self.assertGreater(result.step, 5)
 
 

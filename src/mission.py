@@ -1,3 +1,4 @@
+from src.mission_commander import MissionCommander
 from src.simulator import Simulator
 from src.map import Terrain, extract_from_raw
 from src.models import (
@@ -70,8 +71,16 @@ def divide_search(
         drone = min(
             available,
             key=lambda i: (
-                max(top - drone_positions[i][0], 0, drone_positions[i][0] - bottom)
-                + max(left - drone_positions[i][1], 0, drone_positions[i][1] - right),
+                max(
+                    top - drone_positions[int(i)][0],
+                    0,
+                    drone_positions[int(i)][0] - bottom,
+                )
+                + max(
+                    left - drone_positions[int(i)][1],
+                    0,
+                    drone_positions[int(i)][1] - right,
+                ),
                 i,
             ),
         )
@@ -88,7 +97,7 @@ def mission(
     simulator: Simulator,
     map: list[list[Terrain]],
     drones: dict[str, DroneState],
-    mission_commander: Callable[[MissionState], MissionState],
+    mission_team: Callable[[MissionState], MissionState],
     monitoring_checks,
     sectors: dict[str, Sector] | None = None,
 ) -> MissionState:
@@ -172,7 +181,7 @@ def mission(
                 },
             )
         )
-        mission_state = mission_commander(mission_state)
+        mission_state = mission_team(mission_state)
 
     return mission_state
 
@@ -189,6 +198,6 @@ if __name__ == "__main__":
         simulator,
         terrain,
         drones,
-        mission_commander=naive_mission_commander,
+        mission_team=naive_mission_commander,
         monitoring_checks={"battery_reserve_threshold": 10.0},
     )
