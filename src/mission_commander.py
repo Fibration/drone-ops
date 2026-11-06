@@ -1,8 +1,16 @@
 import re
 
-from src.drone import Objective as DroneObjective, ObjectiveType
+from src.client import client
+from src.drone import Objective, ObjectiveType
 from src.map import no_fly_zone_from_event
-from src.models import MissionState, MissionStatus, Region, Target
+from src.models import (
+    CommanderDecision,
+    MissionState,
+    MissionStatus,
+    Objective,
+    Region,
+    Target,
+)
 
 
 def naive_mission_commander(mission_state: MissionState) -> MissionState:
@@ -34,7 +42,7 @@ def naive_mission_commander(mission_state: MissionState) -> MissionState:
             MissionStatus.SUCCESS
             if all(
                 target.position in reached_targets
-                for target in mission_state.discovered_targets
+                for target in mission_state.discovered_targets.values()
             )
             else MissionStatus.FAILED
         )
@@ -49,12 +57,55 @@ def naive_mission_commander(mission_state: MissionState) -> MissionState:
         drone_id, row, col = detected.groups()
         target = (int(row), int(col))
         if mission_state.current_plan is not None and drone_id in mission_state.drones:
-            mission_state.current_plan.plan[drone_id] = DroneObjective(
-                ObjectiveType.GOTO, target=target
+            for target_id, item in mission_state.discovered_targets.items():
+                if item.position == target:
+                    break
+            else:
+                target_id = str(len(mission_state.discovered_targets))
+                while target_id in mission_state.discovered_targets:
+                    target_id = str(int(target_id) + 1)
+                mission_state.discovered_targets[target_id] = Target(
+                    target_id=target_id, position=target
+                )
+
+            mission_state.current_plan.plan[drone_id] = Objective(
+                drone_id=drone_id,
+                objective_type=ObjectiveType.GOTO,
+                target_id=target_id,
             )
             mission_state.drones[drone_id].assignment = f"go to {target}"
             mission_state.drones[drone_id].route = []
-            if not any(item.position == target for item in mission_state.discovered_targets):
-                mission_state.discovered_targets.append(Target(position=target))
 
     return mission_state
+
+
+class MissionCommander:
+    def __init__(self):
+        self.instructions = "You are a mission commander for a UAV fleet.\
+              The mission objective is to find all the targets and \
+                  move at least one drone to each target without running out of battery.\
+                      Reason through the best course of action after the latest event.\
+                        Then for each drone, choose from four options:\
+                            hold position;\
+                                  return to base;\
+                                  search a sector (the sector choice is autoallocated);\
+                                  go to a specific target.\
+                                include your reasoning."
+
+    def run(self, mission_state: MissionState) -> CommanderDecision:
+        decision = client.responses.parse(
+            model="gpt-4.1",
+            input=[
+                {"role": "developer", "content": self.instructions},
+                {
+                    "role": "user",
+                    "content": mission_state.model_dump_json(),
+                },
+            ],
+            text_format=CommanderDecision,
+        )
+
+        parsed = decision.output_parsed
+        if parsed is None:
+            raise RuntimeError("Mission commander returned no parsed decision")
+        return parsed

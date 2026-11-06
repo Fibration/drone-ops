@@ -6,14 +6,14 @@ from src.models import (
     MissionState,
     MissionStatus,
     Objective,
+    ObjectiveType,
     Region,
+    Sector,
 )
 from src.utility import initialize_drone_states
-from src.drone import Objective as DroneObjective, ObjectiveType
 from math import isqrt
 from typing import Callable
 from src.models import MissionEvent
-
 
 RAW_MAP = [
     "A . . . X X . . .",
@@ -25,31 +25,22 @@ RAW_MAP = [
 ]
 
 
-def divide_search(
-    map: list[list[Terrain]], num_drones: int, drone_positions: list[tuple[int, int]]
-) -> dict[str, DroneObjective]:
-    """Assign one rectangular search sector to each drone, keyed by its index."""
-    if num_drones < 0 or num_drones != len(drone_positions):
-        raise ValueError("num_drones must match the number of drone positions")
-    plans = {}
-    if not map or not map[0] or not num_drones:
-        return plans
+def create_sectors(map: list[list[Terrain]], sector_count: int) -> dict[str, Sector]:
+    """Partition the map into rectangular sectors with inclusive bounds."""
+    if sector_count < 0:
+        raise ValueError("sector_count must be non-negative")
+    if not map or not map[0] or not sector_count:
+        return {}
     rows, cols = len(map), len(map[0])
     if any(len(row) != cols for row in map):
         raise ValueError("The terrain map must be rectangular")
-    for row, col in drone_positions:
-        if not (0 <= row < rows and 0 <= col < cols):
-            raise ValueError("Drone positions must be within the terrain map")
-
-    if num_drones > rows * cols:
-        raise ValueError("There must be at least one map cell per drone")
-    available = set(range(num_drones))
-    sector_count = num_drones
+    if sector_count > rows * cols:
+        raise ValueError("There must be at least one map cell per sector")
     band_count = max(
         (sector_count + cols - 1) // cols,
         min(rows, sector_count, max(1, isqrt(sector_count * rows // cols))),
     )
-    sectors = []
+    sectors: dict[str, Sector] = {}
     for band in range(band_count):
         top = band * rows // band_count
         bottom = (band + 1) * rows // band_count - 1
@@ -57,9 +48,24 @@ def divide_search(
         for column in range(column_count):
             left = column * cols // column_count
             right = (column + 1) * cols // column_count - 1
-            sectors.append(((top, left), (bottom, right)))
+            sector_id = str(len(sectors))
+            sectors[sector_id] = Sector(
+                sector_id=sector_id,
+                bounds=((top, left), (bottom, right)),
+            )
+    return sectors
 
-    for (top, left), (bottom, right) in sectors:
+
+def divide_search(
+    sectors: dict[str, Sector], drone_positions: list[tuple[int, int]]
+) -> dict[str, Objective]:
+    """Assign each prepared sector to the nearest available drone by index."""
+    if len(sectors) != len(drone_positions):
+        raise ValueError("There must be one sector per drone")
+    available = set(range(len(drone_positions)))
+    plans = {}
+    for sector_id, sector in sectors.items():
+        (top, left), (bottom, right) = sector.bounds
         drone = min(
             available,
             key=lambda i: (
@@ -69,10 +75,10 @@ def divide_search(
             ),
         )
         available.remove(drone)
-        plans[str(drone)] = DroneObjective(
-            ObjectiveType.SEARCH_SECTOR,
-            sector=len(plans),
-            bounds=((top, left), (bottom, right)),
+        plans[str(drone)] = Objective(
+            drone_id=str(drone),
+            objective_type=ObjectiveType.SEARCH_SECTOR,
+            sector_id=sector_id,
         )
     return plans
 
@@ -83,10 +89,17 @@ def mission(
     drones: dict[str, DroneState],
     mission_commander: Callable[[MissionState], MissionState],
     monitoring_checks,
+    sectors: dict[str, Sector] | None = None,
 ) -> MissionState:
     drone_ids = list(drones)
+    if sectors is None:
+        sectors = create_sectors(map, len(drone_ids))
+    for drone in drones.values():
+        row, col = drone.position
+        if not (0 <= row < len(map) and 0 <= col < len(map[row])):
+            raise ValueError("Drone positions must be within the terrain map")
     search_sectors = divide_search(
-        map, len(drone_ids), [drones[drone_id].position for drone_id in drone_ids]
+        sectors, [drones[drone_id].position for drone_id in drone_ids]
     )
     initial_plan = MissionPlan(
         plan={
@@ -100,14 +113,18 @@ def mission(
 
     mission_state = MissionState(
         drones=drones,
-        objectives=[Objective(description="find and reach all targets")],
-        no_fly_zones=[Region(coordinates=[
-            (row, col)
-            for row, cells in enumerate(map)
-            for col, cell in enumerate(cells)
-            if cell == Terrain.NO_FLY_ZONE
-        ])],
-        discovered_targets=[],
+        objectives=[],
+        no_fly_zones=[
+            Region(
+                coordinates=[
+                    (row, col)
+                    for row, cells in enumerate(map)
+                    for col, cell in enumerate(cells)
+                    if cell == Terrain.NO_FLY_ZONE
+                ]
+            )
+        ],
+        discovered_targets={},
         events=[],
         explored_cells=set(),
         current_plan=initial_plan,
@@ -131,7 +148,11 @@ def mission(
             drone.route = objective.copy() if isinstance(objective, list) else []
 
         event, updated_drones, explored_cells, timestep = simulator.execute_plan(
-            plan.plan, monitoring_checks, mission_state.explored_cells
+            plan.plan,
+            monitoring_checks,
+            sectors,
+            mission_state.discovered_targets,
+            mission_state.explored_cells,
         )
         mission_state.explored_cells = explored_cells
         mission_state.drones = updated_drones

@@ -1,5 +1,4 @@
 from pydantic import BaseModel, ConfigDict
-from src.drone import Objective as DroneObjective
 from typing import Literal
 from enum import Enum
 
@@ -20,8 +19,23 @@ class MissionStatus(Enum):
     FAILED = "failed"
 
 
+class ObjectiveType(Enum):
+    HOLD = "hold"
+    RETURN_TO_BASE = "return_to_base"
+    SEARCH_SECTOR = "search_sector"
+    GOTO = "goto"
+
+
+class Sector(BaseModel):
+    sector_id: str
+    bounds: tuple[tuple[int, int], tuple[int, int]]
+
+
 class Objective(BaseModel):
-    description: str
+    drone_id: str
+    objective_type: ObjectiveType
+    target_id: str | None = None
+    sector_id: str | None = None
 
 
 class Region(BaseModel):
@@ -29,6 +43,7 @@ class Region(BaseModel):
 
 
 class Target(BaseModel):
+    target_id: str
     position: tuple[int, int]
 
 
@@ -40,7 +55,7 @@ class MissionEvent(BaseModel):
 class MissionPlan(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    plan: dict[str, list[tuple[int, int]] | DroneObjective]
+    plan: dict[str, Objective]
 
 
 class Action(BaseModel):
@@ -52,7 +67,7 @@ class MissionState(BaseModel):
     drones: dict[str, DroneState]
     objectives: list[Objective]
     no_fly_zones: list[Region]
-    discovered_targets: list[Target]
+    discovered_targets: dict[str, Target]
     events: list[MissionEvent]
     explored_cells: set[tuple[int, int]]
 
@@ -67,9 +82,14 @@ class MissionState(BaseModel):
     mission_status: MissionStatus
 
 
+# class CommanderDecision(BaseModel):
+#     next_agent: Literal["fleet_monitor", "mission_planner", "safety_reviewer", "finish"]
+#     objective: str
+
+
 class CommanderDecision(BaseModel):
-    next_agent: Literal["fleet_monitor", "mission_planner", "safety_reviewer", "finish"]
-    objective: str
+    objectives: list[Objective]
+    reason: str
 
 
 class SafetyDecision(BaseModel):

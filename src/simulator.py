@@ -1,5 +1,5 @@
-from src.drone import DroneController, ObjectiveType
-from src.models import DroneState
+from src.drone import DroneController
+from src.models import DroneState, ObjectiveType, Sector, Target
 from src.map import Terrain, no_fly_zone_from_event
 from src.parameters import sensor_range, monitoring_interval
 
@@ -23,6 +23,8 @@ class Simulator:
         self,
         plan,
         monitoring_checks,
+        sectors: dict[str, Sector],
+        targets: dict[str, Target],
         explored_cells: set[tuple[int, int]] | None = None,
     ) -> tuple[str, dict[str, DroneState], set[tuple[int, int]], int]:
         self.event = None
@@ -33,7 +35,7 @@ class Simulator:
             drone = self.drones.get(drone_id)
             if drone is None:
                 continue
-            controller = DroneController(objective)
+            controller = DroneController(objective, sectors, targets)
             if isinstance(objective, list):
                 controller.route = objective
             else:
@@ -47,7 +49,8 @@ class Simulator:
                 if (
                     step is None
                     and not isinstance(controller.objective, list)
-                    and controller.objective.type == ObjectiveType.SEARCH_SECTOR
+                    and controller.objective.objective_type
+                    == ObjectiveType.SEARCH_SECTOR
                 ):
                     controller.calculate_route(
                         self.map, self.drones[drone_id].position, explored_cells

@@ -31,7 +31,8 @@ class MissionIntegrationTest(unittest.TestCase):
 
         self.assertEqual(result.mission_status, MissionStatus.SUCCESS)
         self.assertEqual(result.events[-1].description, "Mission plan exhausted")
-        self.assertIn((1, 7), [target.position for target in result.discovered_targets])
+        self.assertIn((1, 7), [target.position for target in result.discovered_targets.values()])
+        self.assertEqual(len(result.discovered_targets), 1)
         self.assertTrue(
             any(
                 "reached the target at (1, 7)" in event.description
@@ -87,7 +88,8 @@ class MissionIntegrationTest(unittest.TestCase):
         self.assertTrue(zone_added, "Mission never reached the scenario event")
         self.assertEqual(result.mission_status, MissionStatus.SUCCESS)
         self.assertEqual(result.events[-1].description, "Mission plan exhausted")
-        self.assertIn((1, 7), [target.position for target in result.discovered_targets])
+        self.assertIn((1, 7), [target.position for target in result.discovered_targets.values()])
+        self.assertEqual(len(result.discovered_targets), 1)
         self.assertTrue(any(
             "reached the target at (1, 7)" in event.description
             for event in result.events

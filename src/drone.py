@@ -1,22 +1,8 @@
 from enum import Enum
 
 from src.map import Terrain
+from src.models import Objective, ObjectiveType, Sector, Target
 from src.pathfinder import astar
-
-
-class ObjectiveType(Enum):
-    SEARCH_SECTOR = "search sector"
-    GOTO = "go to"
-
-
-class Objective:
-    def __init__(self, type: ObjectiveType, **kwargs):
-        self.type = type
-        if type == ObjectiveType.SEARCH_SECTOR:
-            self.sector = kwargs.get("sector")
-            self.bounds = kwargs.get("bounds")
-        elif type == ObjectiveType.GOTO:
-            self.target = kwargs.get("target")
 
 
 class DroneController:
@@ -25,11 +11,18 @@ class DroneController:
     route_index: int
     to_explore: list[tuple[int, int]]
 
-    def __init__(self, objective: Objective):
+    def __init__(
+        self,
+        objective: Objective,
+        sectors: dict[str, Sector],
+        targets: dict[str, Target],
+    ):
         self.objective = objective
         self.route = []
         self.route_index = 0
         self.to_explore = []
+        self.sectors = sectors
+        self.targets = targets
 
     def calculate_route(
         self,
@@ -37,15 +30,12 @@ class DroneController:
         drone_position: tuple[int, int],
         explored_cells: set[tuple[int, int]],
     ) -> list[tuple[int, int]] | None:
-        if self.objective.type == ObjectiveType.SEARCH_SECTOR:
+        if self.objective.objective_type == ObjectiveType.SEARCH_SECTOR:
+            assert self.objective.sector_id is not None
+            sector = self.sectors[self.objective.sector_id]
             self.to_explore.clear()
-            assert self.objective.bounds is not None
-            for x in range(
-                self.objective.bounds[0][0], self.objective.bounds[1][0] + 1
-            ):
-                for y in range(
-                    self.objective.bounds[0][1], self.objective.bounds[1][1] + 1
-                ):
+            for x in range(sector.bounds[0][0], sector.bounds[1][0] + 1):
+                for y in range(sector.bounds[0][1], sector.bounds[1][1] + 1):
                     if (x, y) not in explored_cells and map[x][y] == Terrain.EMPTY:
                         self.to_explore.append((x, y))
 
@@ -61,9 +51,11 @@ class DroneController:
             )
             self.route_index = 0
 
-        elif self.objective.type == ObjectiveType.GOTO:
-            assert self.objective.target is not None
-            self.route = astar(map, drone_position, self.objective.target)
+        elif self.objective.objective_type == ObjectiveType.GOTO:
+            assert self.objective.target_id is not None
+            self.route = astar(
+                map, drone_position, self.targets[self.objective.target_id].position
+            )
             self.route_index = 0
 
     def next_action(self):
