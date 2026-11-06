@@ -3,6 +3,7 @@ from enum import Enum
 from src.map import Terrain
 from src.models import Objective, ObjectiveType, Sector, Target
 from src.pathfinder import astar
+from src.parameters import BASE_POSITION
 
 
 class DroneController:
@@ -30,7 +31,13 @@ class DroneController:
         drone_position: tuple[int, int],
         explored_cells: set[tuple[int, int]],
     ) -> list[tuple[int, int]] | None:
-        if self.objective.objective_type == ObjectiveType.SEARCH_SECTOR:
+        if self.objective.objective_type == ObjectiveType.HOLD:
+            self.route = []
+            self.route_index = 0
+        elif self.objective.objective_type == ObjectiveType.RETURN_TO_BASE:
+            self.route = astar(map, drone_position, BASE_POSITION, allow_occupied_end=True)
+            self.route_index = 0
+        elif self.objective.objective_type == ObjectiveType.SEARCH_SECTOR:
             assert self.objective.sector_id is not None
             sector = self.sectors[self.objective.sector_id]
             self.to_explore.clear()

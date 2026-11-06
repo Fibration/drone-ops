@@ -1,7 +1,7 @@
 from src.drone import DroneController
 from src.models import DroneState, ObjectiveType, Sector, Target
 from src.map import Terrain, no_fly_zone_from_event
-from src.parameters import sensor_range, monitoring_interval
+from src.parameters import BASE_POSITION, sensor_range, monitoring_interval
 
 
 class Simulator:
@@ -40,6 +40,14 @@ class Simulator:
                 controller.route = objective
             else:
                 controller.calculate_route(self.map, drone.position, explored_cells)
+                if (
+                    objective.objective_type == ObjectiveType.RETURN_TO_BASE
+                    and controller.route is None
+                ):
+                    return (
+                        f"Drone {drone_id} cannot return to base at {BASE_POSITION}",
+                        self.drones, explored_cells, self.timestep,
+                    )
             controllers[drone_id] = controller
 
         while not self.event:
@@ -134,6 +142,11 @@ class Simulator:
                         break
                     elif (
                         self.map[drone.position[0]][drone.position[1]] == Terrain.DRONE
+                        and not (
+                            controllers[drone_id].objective.objective_type
+                            == ObjectiveType.RETURN_TO_BASE
+                            and drone.position == BASE_POSITION
+                        )
                     ):
                         self.event = f"Drone {drone_id} collided with another drone at {drone.position}"
                         break
@@ -143,6 +156,13 @@ class Simulator:
                         )
                         break
                     else:
+                        if (
+                            controllers[drone_id].objective.objective_type
+                            == ObjectiveType.RETURN_TO_BASE
+                            and drone.position == BASE_POSITION
+                        ):
+                            self.event = f"Drone {drone_id} returned to base at {BASE_POSITION}"
+                            break
                         detected_target = next(
                             (
                                 target

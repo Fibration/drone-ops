@@ -14,6 +14,7 @@ from src.utility import initialize_drone_states
 from math import isqrt
 from typing import Callable
 from src.models import MissionEvent
+from src.parameters import BASE_POSITION
 
 RAW_MAP = [
     "A . . . X X . . .",
@@ -146,6 +147,11 @@ def mission(
         for drone_id, drone in mission_state.drones.items():
             objective = plan.plan.get(drone_id)
             drone.route = objective.copy() if isinstance(objective, list) else []
+            if isinstance(objective, Objective):
+                if objective.objective_type == ObjectiveType.HOLD:
+                    drone.assignment = "hold position"
+                elif objective.objective_type == ObjectiveType.RETURN_TO_BASE:
+                    drone.assignment = f"return to base at {BASE_POSITION}"
 
         event, updated_drones, explored_cells, timestep = simulator.execute_plan(
             plan.plan,

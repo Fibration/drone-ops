@@ -7,6 +7,8 @@ def astar(
     terrain_map: list[list[Terrain]],
     start: tuple[int, int],
     end: tuple[int, int],
+    *,
+    allow_occupied_end: bool = False,
 ) -> list[tuple[int, int]] | None:
     """Return shortest cardinal (row, column) steps, or None if unreachable.
 
@@ -20,7 +22,14 @@ def astar(
             raise ValueError("Start and end must be within the terrain map")
     if start == end:
         return []
-    if terrain_map[end[0]][end[1]] in blocked:
+    def is_blocked(position: tuple[int, int]) -> bool:
+        row, col = position
+        return terrain_map[row][col] in blocked and not (
+            allow_occupied_end and position == end
+            and terrain_map[row][col] == Terrain.DRONE
+        )
+
+    if is_blocked(end):
         return None
 
     end_row, end_col = end
@@ -49,7 +58,7 @@ def astar(
             if (
                 0 <= nr < len(terrain_map)
                 and 0 <= nc < len(terrain_map[nr])
-                and terrain_map[nr][nc] not in blocked
+                and not is_blocked(neighbor)
                 and next_cost < costs.get(neighbor, float("inf"))
             ):
                 costs[neighbor] = next_cost

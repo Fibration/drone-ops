@@ -1,14 +1,16 @@
 import re
 
 from src.client import client
+import json
 from src.drone import Objective, ObjectiveType
-from src.map import no_fly_zone_from_event
+from src.map import Terrain, no_fly_zone_from_event
 from src.models import (
     CommanderDecision,
     MissionState,
     MissionStatus,
     Objective,
     Region,
+    Sector,
     Target,
 )
 
@@ -80,7 +82,7 @@ def naive_mission_commander(mission_state: MissionState) -> MissionState:
 
 
 class MissionCommander:
-    def __init__(self):
+    def __init__(self, map: list[list[Terrain]], sectors: dict[str, Sector]):
         self.instructions = "You are a mission commander for a UAV fleet.\
               The mission objective is to find all the targets and \
                   move at least one drone to each target without running out of battery.\
@@ -91,6 +93,14 @@ class MissionCommander:
                                   search a sector (the sector choice is autoallocated);\
                                   go to a specific target.\
                                 include your reasoning."
+        self.map_bounds = {
+            "rows": len(map),
+            "columns": len(map[0]),
+            "coordinate_convention": "zero-based (row, column), bounds inclusive",
+        }
+        self.sectors = {
+            key: sector.model_dump_json() for key, sector in sectors.items()
+        }
 
     def run(self, mission_state: MissionState) -> CommanderDecision:
         decision = client.responses.parse(
@@ -99,7 +109,13 @@ class MissionCommander:
                 {"role": "developer", "content": self.instructions},
                 {
                     "role": "user",
-                    "content": mission_state.model_dump_json(),
+                    "content": json.dumps(
+                        {
+                            "mission_state": mission_state.model_dump_json(),
+                            "map_bounds": self.map_bounds,
+                            "sectors": self.sectors,
+                        }
+                    ),
                 },
             ],
             text_format=CommanderDecision,
