@@ -127,10 +127,15 @@ class Simulator:
                     if drone.battery <= 0:
                         self.controllers[affected_drone_id].update_objective(
                             Objective(
-                                drone_id=affected_drone_id, objective_type=ObjectiveType.HOLD
+                                drone_id=affected_drone_id,
+                                objective_type=ObjectiveType.HOLD,
                             )
                         )
                         actions.pop(affected_drone_id, None)
+                if incident == IncidentType.COMMS_FAILURE:
+                    affected_drone_id = event
+                    drone = self.drones[affected_drone_id]
+                    drone.comms = False
 
             for drone_id, step in actions.items():
                 drone = self.drones[drone_id]
@@ -250,7 +255,9 @@ class Simulator:
                         and drone_id not in self._reported_empty_batteries
                     ):
                         self._reported_empty_batteries.add(drone_id)
-                        self.event = f"Drone {drone_id} ran out of battery at {drone.position}"
+                        self.event = (
+                            f"Drone {drone_id} ran out of battery at {drone.position}"
+                        )
                         break
 
         assert self.event is not None

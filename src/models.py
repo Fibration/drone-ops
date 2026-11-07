@@ -99,3 +99,4 @@ class SafetyDecision(BaseModel):
 class IncidentType(Enum):
     NEW_NO_FLY_ZONE = auto()
     BATTERY_DRAIN = auto()
+    COMMS_FAILURE = auto()
