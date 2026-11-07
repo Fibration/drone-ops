@@ -1,5 +1,3 @@
-import re
-
 from src.client import client
 from typing import Protocol
 import json
@@ -8,7 +6,9 @@ from src.mission_updates import (
     update_no_fly_zones,
     update_discovered_targets,
     update_completed_sectors,
+    evaluate_mission_status,
 )
+from src.policy import NaiveMissionPlannerPolicy
 from src.models import (
     CommanderDecision,
     CommanderObservation,
@@ -23,31 +23,12 @@ from src.models import (
 
 def finish_exhausted_mission(mission_state: MissionState) -> bool:
     """Finish an exhausted plan locally without another model request."""
-    if any(
-        event.description == "Mission plan exhausted"
-        for event in mission_state.latest_events
-    ):
-        reached_targets = {drone.position for drone in mission_state.drones.values()}
-        for event in mission_state.events:
-            reached = re.fullmatch(
-                r"Drone (.+) reached the target at \((-?\d+),\s*(-?\d+)\)",
-                event.description,
-            )
-            if reached is not None:
-                _, row, col = reached.groups()
-                reached_targets.add((int(row), int(col)))
-        mission_state.mission_status = (
-            MissionStatus.SUCCESS
-            if all(
-                target.position in reached_targets
-                for target in mission_state.discovered_targets.values()
-            )
-            else MissionStatus.FAILED
-        )
-        mission_state.next_agent = "finish"
-        return True
-
-    return False
+    status = evaluate_mission_status(mission_state)
+    if status == MissionStatus.ONGOING:
+        return False
+    mission_state.mission_status = status
+    mission_state.next_agent = None
+    return True
 
 
 class CommanderPolicy(Protocol):
@@ -58,34 +39,8 @@ class NaiveCommanderPolicy:
     """Keep current assignments and send detecting drones to known targets."""
 
     def decide(self, observation: CommanderObservation) -> CommanderDecision:
-        state = observation.mission_state
-        current = state.current_plan.plan if state.current_plan is not None else {}
-        plan = {
-            drone_id: current[drone_id].model_copy(deep=True)
-            if drone_id in current else Objective(
-                drone_id=drone_id, objective_type=ObjectiveType.HOLD
-            )
-            for drone_id in state.drones
-        }
-        targets = {target.position: target for target in state.discovered_targets.values()}
-        for event in state.latest_events:
-            detected = re.fullmatch(
-                r"Drone (.+) detected a target at \((-?\d+),\s*(-?\d+)\)",
-                event.description,
-            )
-            if detected is None:
-                continue
-            drone_id, row, col = detected.groups()
-            target = targets.get((int(row), int(col)))
-            if drone_id in plan and target is not None:
-                plan[drone_id] = Objective(
-                    drone_id=drone_id, objective_type=ObjectiveType.GOTO,
-                    target_id=target.target_id,
-                )
-        return CommanderDecision(
-            objectives=list(plan.values()),
-            reason="Keep assignments; send detecting drones to their discovered targets.",
-        )
+        proposal = NaiveMissionPlannerPolicy().evaluate(observation.mission_state)[0]
+        return CommanderDecision(objectives=list(proposal.plan.values()), reason=proposal.reason)
 
 
 class OpenAICommanderPolicy:

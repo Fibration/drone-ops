@@ -85,7 +85,8 @@ class EventBatchTest(unittest.TestCase):
             drones=drones, objectives=[], no_fly_zones=[], discovered_targets={},
             events=events.copy(), latest_events=events, explored_cells=set(),
             current_plan=MissionPlan(plan={obj.drone_id: obj for obj in objectives}),
-            proposed_action=None, next_agent=None, safety_status=None,
+            telemetry={}, proposed_plans=[], under_review=None,
+            next_agent=None, safety_status=None,
             human_approval=None, step=5, mission_status=MissionStatus.ONGOING,
         )
         return state, CommanderDecision(objectives=objectives, reason="Batch test")

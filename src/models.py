@@ -1,5 +1,5 @@
 from pydantic import BaseModel, ConfigDict, Field
-from typing import Literal
+from typing import Literal, Protocol
 from enum import Enum, auto
 
 from src.map import Terrain
@@ -59,9 +59,17 @@ class MissionPlan(BaseModel):
     plan: dict[str, Objective]
 
 
-class Action(BaseModel):
-    action_type: str
-    details: str
+class Plan(BaseModel):
+    plan: dict[str, Objective]
+    reason: str
+    estimated_completion_times: int
+
+
+class AgentType(str, Enum):
+    FLEET_MONITOR = "FLEET_MONITOR"
+    MISSION_COMMANDER = "MISSION_COMMANDER"
+    MISSION_PLANNER = "MISSION_PLANNER"
+    SAFETY_REVIEWER = "SAFETY_REVIEWER"
 
 
 class MissionState(BaseModel):
@@ -74,11 +82,14 @@ class MissionState(BaseModel):
     latest_events: list[MissionEvent] = Field(default_factory=list)
     explored_cells: set[tuple[int, int]]
     completed_sectors: set[str] = Field(default_factory=set)
+    telemetry: dict[str, str | int | float]
 
     current_plan: MissionPlan | None
-    proposed_action: Action | None
+    proposed_plans: list[Plan]
+    under_review: Plan | None
+    needs_replan: bool = True
 
-    next_agent: str | None
+    next_agent: AgentType | None
     safety_status: str | None
     human_approval: bool | None
 
@@ -111,3 +122,9 @@ class IncidentType(Enum):
     NEW_NO_FLY_ZONE = auto()
     BATTERY_DRAIN = auto()
     COMMS_FAILURE = auto()
+
+
+
+
+class Agent(Protocol):
+    def run(self, state: MissionState) -> dict: ...

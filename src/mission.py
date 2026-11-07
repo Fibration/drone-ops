@@ -139,7 +139,9 @@ def mission(
         explored_cells=set(),
         completed_sectors=set(),
         current_plan=initial_plan,
-        proposed_action=None,
+        telemetry={},
+        proposed_plans=[],
+        under_review=None,
         next_agent=None,
         safety_status=None,
         human_approval=None,
@@ -193,8 +195,10 @@ def mission(
 
 
 if __name__ == "__main__":
-    from functools import partial
-    from src.mission_commander import NaiveCommanderPolicy, mission_team
+    from src.mission_graph import graph
+
+    def control_cycle(state: MissionState) -> MissionState:
+        return MissionState.model_validate(graph.invoke(state))
 
     truth_terrain, terrain, drone_positions, _ = extract_from_raw(RAW_MAP)
     sorted_drone_positions = sorted(drone_positions, key=lambda x: x[0])
@@ -206,9 +210,7 @@ if __name__ == "__main__":
         simulator,
         terrain,
         drones,
-        mission_team=partial(
-            mission_team, map=terrain, sectors=sectors, policy=NaiveCommanderPolicy()
-        ),
+        mission_team=control_cycle,
         sectors=sectors,
         monitoring_checks={"battery_reserve_threshold": 10.0},
     )

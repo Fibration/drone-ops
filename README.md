@@ -2,18 +2,29 @@
 Agentic Multi-UAV Mission Control &amp; Incident Recovery
 
 ```mermaid
-flowchart TD
-    start([START]) --> fleetMonitor[FLEET MONITOR]
-    fleetMonitor --> commander[COMMANDER]
-    commander -->|telemetry needed| fleetMonitor
-    commander -->|planning needed| planner[PLANNER]
-    planner --> commander
-    commander -->|plan ready| safetyReview[SAFETY REVIEW]
-    safetyReview --> approve[APPROVE]
-    safetyReview --> revise[REVISE]
-    safetyReview --> humanApproval[HUMAN APPROVAL]
-    approve --> execute[EXECUTE]
-    revise --> planner
-    humanApproval --> execute
-    commander -->|mission complete| finish([END])
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+        __start__([<p>__start__</p>]):::first
+        fleet_monitor(fleet_monitor)
+        mission_commander(mission_commander)
+        mission_planner(mission_planner)
+        safety_reviewer(safety_reviewer)
+        human_reviewer(human_reviewer)
+        __end__([<p>__end__</p>]):::last
+        __start__ --> fleet_monitor;
+        fleet_monitor --> mission_commander;
+        human_reviewer -. &nbsp;approve&nbsp; .-> __end__;
+        human_reviewer -. &nbsp;revise&nbsp; .-> mission_planner;
+        mission_commander -. &nbsp;finish&nbsp; .-> __end__;
+        mission_commander -.-> fleet_monitor;
+        mission_commander -.-> mission_planner;
+        mission_commander -.-> safety_reviewer;
+        mission_planner --> mission_commander;
+        safety_reviewer -. &nbsp;approve&nbsp; .-> __end__;
+        safety_reviewer -.-> human_reviewer;
+        safety_reviewer -. &nbsp;revise&nbsp; .-> mission_planner;
 ```

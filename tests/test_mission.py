@@ -3,12 +3,37 @@ import unittest
 from src.map import Terrain, extract_from_raw
 from src.mission import RAW_MAP, create_sectors, mission
 from src.mission_commander import NaiveCommanderPolicy, mission_team
-from src.models import IncidentType, MissionStatus
+from src.mission_graph import graph
+from src.models import IncidentType, MissionState, MissionStatus
 from src.simulator import Simulator
 from src.utility import initialize_drone_states
 
 
 class MissionIntegrationTest(unittest.TestCase):
+    def test_graph_policies_complete_example_with_no_fly_zone(self):
+        truth, terrain, positions, _ = extract_from_raw(RAW_MAP)
+        drones = initialize_drone_states(sorted(positions), default_battery=25.0)
+        simulator = Simulator(truth, drones, targets=[(1, 7)], scenario={
+            5: (IncidentType.NEW_NO_FLY_ZONE,
+                "New no-fly zone added: rows 3-4, columns 4-8"),
+        })
+
+        def control_cycle(state):
+            self.assertLess(len(state.events), 100, "Mission did not terminate")
+            return MissionState.model_validate(graph.invoke(state, config={"recursion_limit": 10}))
+
+        result = mission(simulator, terrain, drones, control_cycle,
+                         {"battery_reserve_threshold": 10.0})
+        self.assertEqual(result.mission_status, MissionStatus.SUCCESS)
+        self.assertEqual(result.completed_sectors, {"0", "1"})
+        self.assertEqual(len(result.discovered_targets), 1)
+        self.assertTrue(any("reached the target at (1, 7)" in event.description
+                            for event in result.events))
+        known_zones = {cell for region in result.no_fly_zones for cell in region.coordinates}
+        self.assertTrue({(row, col) for row in (3, 4) for col in range(4, 9)} <= known_zones)
+        assert result.current_plan is not None
+        self.assertEqual(set(result.current_plan.plan), set(drones))
+
     def test_example_search_completes_successfully(self):
         truth, terrain, positions, _ = extract_from_raw(RAW_MAP)
         drones = initialize_drone_states(
