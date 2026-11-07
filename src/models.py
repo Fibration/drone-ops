@@ -2,6 +2,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from typing import Literal
 from enum import Enum, auto
 
+from src.map import Terrain
+
 
 class DroneState(BaseModel):
     id: str
@@ -87,6 +89,12 @@ class MissionState(BaseModel):
 # class CommanderDecision(BaseModel):
 #     next_agent: Literal["fleet_monitor", "mission_planner", "safety_reviewer", "finish"]
 #     objective: str
+
+
+class CommanderObservation(BaseModel):
+    mission_state: MissionState
+    world: list[list[Terrain]]
+    sectors: dict[str, Sector]
 
 
 class CommanderDecision(BaseModel):

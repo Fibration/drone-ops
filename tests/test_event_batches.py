@@ -100,7 +100,8 @@ class EventBatchTest(unittest.TestCase):
             "Sector survey fully explored",
         ])
 
-        def decide(updated):
+        def decide(observation):
+            updated = observation.mission_state
             self.assertEqual({target.position for target in updated.discovered_targets.values()},
                              {(0, 4), (1, 3)})
             cells = [cell for region in updated.no_fly_zones for cell in region.coordinates]
@@ -109,7 +110,7 @@ class EventBatchTest(unittest.TestCase):
             self.assertEqual(updated.completed_sectors, {"survey"})
             return decision
 
-        with patch("src.mission_commander.MissionCommander.run", side_effect=decide) as run:
+        with patch("src.mission_commander.OpenAICommanderPolicy.decide", side_effect=decide) as run:
             mission_team(state, [[Terrain.EMPTY] * 6 for _ in range(6)], {})
         run.assert_called_once()
 
