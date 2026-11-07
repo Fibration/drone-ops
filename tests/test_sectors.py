@@ -14,7 +14,9 @@ class SectorTest(unittest.TestCase):
             with self.subTest(count=count):
                 sectors = create_sectors(terrain, count)
                 self.assertEqual(len(sectors), count)
-                self.assertEqual(set(sectors), {sector.sector_id for sector in sectors.values()})
+                self.assertEqual(
+                    set(sectors), {sector.sector_id for sector in sectors.values()}
+                )
                 cells = []
                 for sector in sectors.values():
                     (top, left), (bottom, right) = sector.bounds
@@ -24,16 +26,18 @@ class SectorTest(unittest.TestCase):
                         for col in range(left, right + 1)
                     )
                 self.assertEqual(len(cells), 54)
-                self.assertEqual(set(cells), {
-                    (row, col) for row in range(6) for col in range(9)
-                })
+                self.assertEqual(
+                    set(cells), {(row, col) for row in range(6) for col in range(9)}
+                )
 
     def test_assigns_prepared_sectors_to_nearest_available_drones(self):
         sectors = {
             "west": Sector(sector_id="west", bounds=((0, 0), (5, 4))),
             "east": Sector(sector_id="east", bounds=((0, 5), (5, 8))),
         }
-        original = {key: sector.model_copy(deep=True) for key, sector in sectors.items()}
+        original = {
+            key: sector.model_copy(deep=True) for key, sector in sectors.items()
+        }
         plans = divide_search(sectors, [(5, 8), (0, 0)])
         self.assertEqual(plans["1"].sector_id, "west")
         self.assertEqual(plans["0"].sector_id, "east")
@@ -46,12 +50,15 @@ class SectorTest(unittest.TestCase):
     def test_controller_routes_with_sector_dictionary(self):
         _, terrain, _, _ = extract_from_raw(RAW_MAP)
         sectors = {"west": Sector(sector_id="west", bounds=((0, 0), (5, 3)))}
-        controller = DroneController("0", terrain, sectors, {})
-        controller.update_position((0, 0))
+        controller = DroneController("0", (0, 0), terrain, sectors, {})
         controller.update_explored_cells({(0, 0)})
-        controller.update_objective(Objective(
-            drone_id="0", objective_type=ObjectiveType.SEARCH_SECTOR, sector_id="west"
-        ))
+        controller.update_objective(
+            Objective(
+                drone_id="0",
+                objective_type=ObjectiveType.SEARCH_SECTOR,
+                sector_id="west",
+            )
+        )
         self.assertTrue(controller.route)
         self.assertEqual(controller.next_action(), (1, 0))
 

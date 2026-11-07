@@ -8,6 +8,7 @@ class DroneController:
     def __init__(
         self,
         drone_id: str,
+        position: tuple[int, int],
         map: list[list[Terrain]],
         sectors: dict[str, Sector],
         targets: dict[str, Target],
@@ -15,7 +16,7 @@ class DroneController:
         self.drone_id = drone_id
         self.objective = Objective(drone_id=drone_id, objective_type=ObjectiveType.HOLD)
         self.map = map
-        self.position = (0, 0)
+        self.position = position
         self.explored_cells: set[tuple[int, int]] = set()
         self.route: list[tuple[int, int]] = []
         self.route_index = 0
@@ -57,7 +58,8 @@ class DroneController:
             ]
             self.to_explore.sort(
                 key=lambda pos: abs(pos[0] - self.position[0])
-                + abs(pos[1] - self.position[1]), reverse=True,
+                + abs(pos[1] - self.position[1]),
+                reverse=True,
             )
             had_candidates = bool(self.to_explore)
             while self.to_explore:
@@ -77,11 +79,15 @@ class DroneController:
         elif objective_type == ObjectiveType.GOTO:
             assert self.objective.target_id is not None
             destination = self.targets[self.objective.target_id].position
-            failure_message = f"cannot reach target {self.objective.target_id} at {destination}"
+            failure_message = (
+                f"cannot reach target {self.objective.target_id} at {destination}"
+            )
         else:
             raise ValueError(f"Unsupported objective type: {objective_type}")
         result = astar(
-            self.map, self.position, destination,
+            self.map,
+            self.position,
+            destination,
             allow_occupied_end=objective_type == ObjectiveType.RETURN_TO_BASE,
         )
         if isinstance(result, NoRouteFound):
@@ -96,7 +102,10 @@ class DroneController:
         if self.failure_event is not None:
             return None
         if self.route_index >= len(self.route):
-            if allow_replan and self.objective.objective_type == ObjectiveType.SEARCH_SECTOR:
+            if (
+                allow_replan
+                and self.objective.objective_type == ObjectiveType.SEARCH_SECTOR
+            ):
                 self.calculate_route()
             if self.route_index >= len(self.route):
                 return None

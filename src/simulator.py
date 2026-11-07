@@ -20,10 +20,9 @@ class Simulator:
         self.scenario = scenario
         # Controllers start with HOLD and no previously delivered route.
         self.controllers = {
-            drone_id: DroneController(drone_id, map, {}, {}) for drone_id in drones
+            drone_id: DroneController(drone_id, drone.position, map, {}, {})
+            for drone_id, drone in drones.items()
         }
-        for drone_id, controller in self.controllers.items():
-            controller.update_position(drones[drone_id].position)
 
     def execute_plan(
         self,
@@ -53,10 +52,17 @@ class Simulator:
             controller.targets = targets
             objective = plan.get(drone_id)
             if objective is None:
-                objective = Objective(drone_id=drone_id, objective_type=ObjectiveType.HOLD)
+                objective = Objective(
+                    drone_id=drone_id, objective_type=ObjectiveType.HOLD
+                )
             controller.update_objective(objective)
             if controller.failure_event is not None:
-                return controller.failure_event, self.drones, explored_cells, self.timestep
+                return (
+                    controller.failure_event,
+                    self.drones,
+                    explored_cells,
+                    self.timestep,
+                )
 
         while not self.event:
             actions = {}
@@ -69,7 +75,12 @@ class Simulator:
                     controller.update_explored_cells(explored_cells)
                 step = controller.next_action(allow_replan=drone.comms, consume=False)
                 if controller.failure_event is not None:
-                    return controller.failure_event, self.drones, explored_cells, self.timestep
+                    return (
+                        controller.failure_event,
+                        self.drones,
+                        explored_cells,
+                        self.timestep,
+                    )
                 if step is not None:
                     actions[drone_id] = step
             if not actions:
@@ -108,9 +119,11 @@ class Simulator:
                     controller.update_position(drone.position)
                     drone.battery -= 1  # Decrease battery for each move
                     if drone.battery <= 0:
-                        controller.update_objective(Objective(
-                            drone_id=drone_id, objective_type=ObjectiveType.HOLD
-                        ))
+                        controller.update_objective(
+                            Objective(
+                                drone_id=drone_id, objective_type=ObjectiveType.HOLD
+                            )
+                        )
                     row, col = drone.position
                     for r in range(
                         max(0, row - sensor_range),
@@ -153,13 +166,12 @@ class Simulator:
                             f"Drone {drone_id} reached the target at {drone.position}"
                         )
                         break
-                    elif (
-                        self.map[drone.position[0]][drone.position[1]] == Terrain.DRONE
-                        and not (
-                            controllers[drone_id].objective.objective_type
-                            == ObjectiveType.RETURN_TO_BASE
-                            and drone.position == BASE_POSITION
-                        )
+                    elif self.map[drone.position[0]][
+                        drone.position[1]
+                    ] == Terrain.DRONE and not (
+                        controllers[drone_id].objective.objective_type
+                        == ObjectiveType.RETURN_TO_BASE
+                        and drone.position == BASE_POSITION
                     ):
                         self.event = f"Drone {drone_id} collided with another drone at {drone.position}"
                         break
@@ -174,7 +186,9 @@ class Simulator:
                             == ObjectiveType.RETURN_TO_BASE
                             and drone.position == BASE_POSITION
                         ):
-                            self.event = f"Drone {drone_id} returned to base at {BASE_POSITION}"
+                            self.event = (
+                                f"Drone {drone_id} returned to base at {BASE_POSITION}"
+                            )
                             break
                         detected_target = next(
                             (
