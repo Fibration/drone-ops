@@ -3,7 +3,7 @@ import unittest
 from src.map import Terrain, extract_from_raw
 from src.mission import RAW_MAP, mission
 from src.mission_commander import naive_mission_commander
-from src.models import MissionStatus
+from src.models import IncidentType, MissionStatus
 from src.simulator import Simulator
 from src.utility import initialize_drone_states
 
@@ -52,7 +52,7 @@ class MissionIntegrationTest(unittest.TestCase):
         )
         zone = {(row, col) for row in (3, 4) for col in range(4, 9)}
         zone_event = "New no-fly zone added: rows 3-4, columns 4-8"
-        simulator = Simulator(truth, drones, targets=[(1, 7)], scenario={5: zone_event})
+        simulator = Simulator(truth, drones, targets=[(1, 7)], scenario={5: (IncidentType.NEW_NO_FLY_ZONE, zone_event)})
         zone_added = False
 
         def commander(state):

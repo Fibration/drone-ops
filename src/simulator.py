@@ -1,5 +1,12 @@
 from src.drone import DroneController
-from src.models import DroneState, Objective, ObjectiveType, Sector, Target
+from src.models import (
+    DroneState,
+    Objective,
+    ObjectiveType,
+    Sector,
+    Target,
+    IncidentType,
+)
 from src.map import Terrain, no_fly_zone_from_event
 from src.parameters import BASE_POSITION, sensor_range, monitoring_interval
 
@@ -10,7 +17,7 @@ class Simulator:
         map: list[list[Terrain]],
         drones: dict[str, DroneState],
         targets: list[tuple[int, int]],
-        scenario: dict[int, str] = {},
+        scenario: dict[int, tuple[IncidentType, str]] = {},
     ):
         self.map = map
         self.drones = drones
@@ -18,6 +25,9 @@ class Simulator:
         self.timestep = 0
         self.targets = targets
         self.scenario = scenario
+        self._reported_empty_batteries = {
+            drone_id for drone_id, drone in drones.items() if drone.battery <= 0
+        }
         # Controllers start with HOLD and no previously delivered route.
         self.controllers = {
             drone_id: DroneController(drone_id, drone.position, map, {}, {})
@@ -90,22 +100,37 @@ class Simulator:
             self.timestep += 1
             monitor = self.timestep % monitoring_interval == 0
             if self.timestep in self.scenario:
-                self.event = self.scenario[self.timestep]
-                zone = no_fly_zone_from_event(self.event)
-                if zone is not None:
-                    if any(
-                        row >= len(self.map) or col >= len(self.map[row])
-                        for row, col in zone
-                    ):
-                        raise ValueError("No-fly zone must be within the terrain map")
-                    for row, col in zone:
-                        self.map[row][col] = Terrain.NO_FLY_ZONE
-                return (
-                    self.event,
-                    self.drones,
-                    explored_cells,
-                    self.timestep,
-                )
+                incident, event = self.scenario[self.timestep]
+                if incident == IncidentType.NEW_NO_FLY_ZONE:
+                    self.event = event
+                    zone = no_fly_zone_from_event(self.event)
+                    if zone is not None:
+                        if any(
+                            row >= len(self.map) or col >= len(self.map[row])
+                            for row, col in zone
+                        ):
+                            raise ValueError(
+                                "No-fly zone must be within the terrain map"
+                            )
+                        for row, col in zone:
+                            self.map[row][col] = Terrain.NO_FLY_ZONE
+                    return (
+                        self.event,
+                        self.drones,
+                        explored_cells,
+                        self.timestep,
+                    )
+                if incident == IncidentType.BATTERY_DRAIN:
+                    affected_drone_id = event
+                    drone = self.drones[affected_drone_id]
+                    drone.battery = max(0.0, drone.battery - 10)
+                    if drone.battery <= 0:
+                        self.controllers[affected_drone_id].update_objective(
+                            Objective(
+                                drone_id=affected_drone_id, objective_type=ObjectiveType.HOLD
+                            )
+                        )
+                        actions.pop(affected_drone_id, None)
 
             for drone_id, step in actions.items():
                 drone = self.drones[drone_id]
@@ -176,6 +201,7 @@ class Simulator:
                         self.event = f"Drone {drone_id} collided with another drone at {drone.position}"
                         break
                     elif drone.battery <= 0:
+                        self._reported_empty_batteries.add(drone_id)
                         self.event = (
                             f"Drone {drone_id} ran out of battery at {drone.position}"
                         )
@@ -214,6 +240,18 @@ class Simulator:
                         elif drone.comms is False:
                             self.event = f"Drone {drone_id} lost communication at {drone.position}"
                             break
+
+            # A silently depleted drone no longer moves, but monitoring can
+            # still discover its battery state while the rest of the fleet flies.
+            if monitor and not self.event:
+                for drone_id, drone in self.drones.items():
+                    if (
+                        drone.battery <= 0
+                        and drone_id not in self._reported_empty_batteries
+                    ):
+                        self._reported_empty_batteries.add(drone_id)
+                        self.event = f"Drone {drone_id} ran out of battery at {drone.position}"
+                        break
 
         assert self.event is not None
         return self.event, self.drones, explored_cells, self.timestep

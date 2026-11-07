@@ -3,7 +3,7 @@ import unittest
 from src.drone import DroneController
 from src.map import Terrain, extract_from_raw
 from src.mission import RAW_MAP, mission
-from src.models import MissionStatus, Objective, ObjectiveType, Sector, Target
+from src.models import MissionStatus, Objective, ObjectiveType, Sector, Target, IncidentType
 from src.pathfinder import NoRouteFound, astar
 from src.simulator import Simulator
 from src.utility import initialize_drone_states
@@ -94,7 +94,7 @@ class FlightObjectiveTest(unittest.TestCase):
 
     def test_disconnected_drone_finishes_delivered_route_then_holds(self):
         drones = initialize_drone_states([(0, 0)], 25.0)
-        simulator = Simulator([[Terrain.EMPTY] * 4], drones, [], scenario={1: "Paused"})
+        simulator = Simulator([[Terrain.EMPTY] * 4], drones, [], scenario={1: (IncidentType.NEW_NO_FLY_ZONE, "New no-fly zone added: rows 0-0, columns 3-3")})
         target = Target(target_id="0", position=(0, 2))
         simulator.execute_plan(
             {
@@ -140,7 +140,7 @@ class FlightObjectiveTest(unittest.TestCase):
 
     def test_disconnected_route_survives_pause_and_omitted_plan(self):
         drones = initialize_drone_states([(0, 3)], 25.0)
-        simulator = Simulator([[Terrain.EMPTY] * 4], drones, [], scenario={2: "Paused"})
+        simulator = Simulator([[Terrain.EMPTY] * 4], drones, [], scenario={2: (IncidentType.NEW_NO_FLY_ZONE, "New no-fly zone added: rows 0-0, columns 3-3")})
         plan = {
             "0": Objective(drone_id="0", objective_type=ObjectiveType.RETURN_TO_BASE)
         }
@@ -150,7 +150,7 @@ class FlightObjectiveTest(unittest.TestCase):
             {},
             {},
         )
-        self.assertEqual(event, "Paused")
+        self.assertEqual(event, "New no-fly zone added: rows 0-0, columns 3-3")
         controller = simulator.controllers["0"]
         self.assertEqual(controller.route[controller.route_index :], [(0, -1), (0, -1)])
         drones["0"].comms = False
@@ -232,14 +232,14 @@ class FlightObjectiveTest(unittest.TestCase):
     def test_mission_applies_hold_and_return_after_scenario(self):
         truth, terrain, positions, _ = extract_from_raw(RAW_MAP)
         drones = initialize_drone_states(sorted(positions), 25.0)
-        simulator = Simulator(truth, drones, [], scenario={2: "Return fleet"})
+        simulator = Simulator(truth, drones, [], scenario={2: (IncidentType.NEW_NO_FLY_ZONE, "New no-fly zone added: rows 3-4, columns 1-3")})
         held_position = None
 
         def commander(state):
             nonlocal held_position
             self.assertLess(len(state.events), 20, "Mission did not terminate")
             event = state.events[-1].description
-            if event == "Return fleet":
+            if event == "New no-fly zone added: rows 3-4, columns 1-3":
                 held_position = state.drones["1"].position
                 state.current_plan.plan = {
                     "0": Objective(

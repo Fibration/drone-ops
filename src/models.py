@@ -1,6 +1,6 @@
 from pydantic import BaseModel, ConfigDict
 from typing import Literal
-from enum import Enum
+from enum import Enum, auto
 
 
 class DroneState(BaseModel):
@@ -94,3 +94,8 @@ class CommanderDecision(BaseModel):
 class SafetyDecision(BaseModel):
     outcome: Literal["approve", "revise", "human_approval"]
     violations: list[str]
+
+
+class IncidentType(Enum):
+    NEW_NO_FLY_ZONE = auto()
+    BATTERY_DRAIN = auto()

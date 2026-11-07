@@ -9,6 +9,7 @@ from src.map import Terrain, extract_from_raw
 from src.mission import RAW_MAP, create_sectors, mission
 from src.mission_commander import mission_team
 from src.models import (
+    IncidentType,
     CommanderDecision, Objective, ObjectiveType, MissionStatus,
 )
 from src.simulator import Simulator
@@ -22,7 +23,7 @@ class MissionTeamTest(unittest.TestCase):
         sectors = create_sectors(terrain, len(drones))
         zone = {(row, col) for row in (3, 4) for col in range(4, 9)}
         zone_event = "New no-fly zone added: rows 3-4, columns 4-8"
-        simulator = Simulator(truth, drones, [(1, 7)], scenario={5: zone_event})
+        simulator = Simulator(truth, drones, [(1, 7)], scenario={5: (IncidentType.NEW_NO_FLY_ZONE, zone_event)})
         calls = 0
         zone_seen = False
 
