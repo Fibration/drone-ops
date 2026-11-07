@@ -2,10 +2,10 @@ import unittest
 from unittest.mock import patch
 
 from src.map import Terrain
-from src.mission_commander import mission_team, naive_mission_commander
+from src.mission_commander import mission_team, NaiveCommanderPolicy
 from src.mission_updates import update_completed_sectors
 from src.models import (
-    CommanderDecision, IncidentType, MissionEvent, MissionPlan, MissionState,
+    CommanderDecision, CommanderObservation, IncidentType, MissionEvent, MissionPlan, MissionState,
     MissionStatus, Objective, ObjectiveType, Sector, Target,
 )
 from src.simulator import Simulator
@@ -145,18 +145,43 @@ class EventBatchTest(unittest.TestCase):
         self.assertEqual(result.mission_status, MissionStatus.SUCCESS)
         run.assert_not_called()
 
-    def test_naive_commander_applies_zone_and_detection_from_same_batch(self):
+    def test_naive_policy_uses_shared_zone_target_and_completion_updates(self):
         state, _ = self.make_state([
             "Drone 0 detected a target at (0, 4)",
             "New no-fly zone added: rows 3-3, columns 0-1",
             "Sector survey fully explored",
         ])
-        result = naive_mission_commander(state)
+        result = mission_team(state, [[Terrain.EMPTY] * 6 for _ in range(6)], {},
+                              policy=NaiveCommanderPolicy())
         assert result.current_plan is not None
         self.assertEqual(result.current_plan.plan["0"].objective_type, ObjectiveType.GOTO)
         self.assertEqual(len(result.discovered_targets), 1)
         self.assertEqual(result.no_fly_zones[0].coordinates, [(3, 0), (3, 1)])
         self.assertEqual(result.completed_sectors, {"survey"})
+
+    def test_naive_policy_returns_decision_without_mutating_observation(self):
+        state, _ = self.make_state(["Drone 0 detected a target at (0, 4)"])
+        state.discovered_targets["target"] = Target(target_id="target", position=(0, 4))
+        before = state.model_dump()
+        decision = NaiveCommanderPolicy().decide(CommanderObservation(
+            mission_state=state, world=[[Terrain.EMPTY] * 6 for _ in range(6)], sectors={},
+        ))
+        objectives = {objective.drone_id: objective for objective in decision.objectives}
+        self.assertEqual(objectives["0"].objective_type, ObjectiveType.GOTO)
+        self.assertEqual(objectives["0"].target_id, "target")
+        self.assertEqual(objectives["1"].objective_type, ObjectiveType.HOLD)
+        self.assertEqual(state.model_dump(), before)
+
+    def test_naive_policy_defaults_to_hold_when_no_plan_exists(self):
+        state, _ = self.make_state([])
+        state.current_plan = None
+        decision = NaiveCommanderPolicy().decide(CommanderObservation(
+            mission_state=state, world=[[Terrain.EMPTY] * 6 for _ in range(6)], sectors={},
+        ))
+        self.assertEqual({objective.drone_id for objective in decision.objectives}, {"0", "1"})
+        self.assertTrue(all(objective.objective_type == ObjectiveType.HOLD
+                            for objective in decision.objectives))
+        self.assertIsNone(state.current_plan)
 
 
 if __name__ == "__main__":

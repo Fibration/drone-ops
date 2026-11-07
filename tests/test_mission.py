@@ -1,8 +1,8 @@
 import unittest
 
 from src.map import Terrain, extract_from_raw
-from src.mission import RAW_MAP, mission
-from src.mission_commander import naive_mission_commander
+from src.mission import RAW_MAP, create_sectors, mission
+from src.mission_commander import NaiveCommanderPolicy, mission_team
 from src.models import IncidentType, MissionStatus
 from src.simulator import Simulator
 from src.utility import initialize_drone_states
@@ -15,11 +15,12 @@ class MissionIntegrationTest(unittest.TestCase):
             sorted(positions, key=lambda position: position[0]),
             default_battery=25.0,
         )
+        sectors = create_sectors(terrain, len(drones))
         simulator = Simulator(truth, drones, targets=[(1, 7)])
 
         def commander(state):
             self.assertLess(len(state.events), 200, "Mission did not terminate")
-            return naive_mission_commander(state)
+            return mission_team(state, terrain, sectors, policy=NaiveCommanderPolicy())
 
         result = mission(
             simulator,
@@ -52,6 +53,7 @@ class MissionIntegrationTest(unittest.TestCase):
         )
         zone = {(row, col) for row in (3, 4) for col in range(4, 9)}
         zone_event = "New no-fly zone added: rows 3-4, columns 4-8"
+        sectors = create_sectors(terrain, len(drones))
         simulator = Simulator(truth, drones, targets=[(1, 7)], scenario={5: (IncidentType.NEW_NO_FLY_ZONE, zone_event)})
         zone_added = False
 
@@ -70,7 +72,7 @@ class MissionIntegrationTest(unittest.TestCase):
                 if zone_event not in latest:
                     for drone in state.drones.values():
                         self.assertNotIn(drone.position, zone)
-            result = naive_mission_commander(state)
+            result = mission_team(state, terrain, sectors, policy=NaiveCommanderPolicy())
             if zone_added:
                 known_zones = {
                     cell

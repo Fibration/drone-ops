@@ -193,17 +193,22 @@ def mission(
 
 
 if __name__ == "__main__":
-    from src.mission_commander import naive_mission_commander
+    from functools import partial
+    from src.mission_commander import NaiveCommanderPolicy, mission_team
 
     truth_terrain, terrain, drone_positions, _ = extract_from_raw(RAW_MAP)
     sorted_drone_positions = sorted(drone_positions, key=lambda x: x[0])
     drones = initialize_drone_states(sorted_drone_positions, default_battery=25.0)
     simulator = Simulator(truth_terrain, drones, targets=[(1, 7)])
+    sectors = create_sectors(terrain, len(drones))
 
     mission(
         simulator,
         terrain,
         drones,
-        mission_team=naive_mission_commander,
+        mission_team=partial(
+            mission_team, map=terrain, sectors=sectors, policy=NaiveCommanderPolicy()
+        ),
+        sectors=sectors,
         monitoring_checks={"battery_reserve_threshold": 10.0},
     )

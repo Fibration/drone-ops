@@ -50,29 +50,42 @@ def finish_exhausted_mission(mission_state: MissionState) -> bool:
     return False
 
 
-def naive_mission_commander(mission_state: MissionState) -> MissionState:
-    update_no_fly_zones(mission_state)
-    update_completed_sectors(mission_state)
-
-    detected = update_discovered_targets(mission_state)
-
-    if finish_exhausted_mission(mission_state):
-        return mission_state
-
-    for drone_id, target in detected:
-        if mission_state.current_plan is not None and drone_id in mission_state.drones:
-            mission_state.current_plan.plan[drone_id] = Objective(
-                drone_id=drone_id,
-                objective_type=ObjectiveType.GOTO,
-                target_id=target.target_id,
-            )
-            mission_state.drones[drone_id].assignment = f"go to {target.position}"
-
-    return mission_state
-
-
 class CommanderPolicy(Protocol):
     def decide(self, observation: CommanderObservation) -> CommanderDecision: ...
+
+
+class NaiveCommanderPolicy:
+    """Keep current assignments and send detecting drones to known targets."""
+
+    def decide(self, observation: CommanderObservation) -> CommanderDecision:
+        state = observation.mission_state
+        current = state.current_plan.plan if state.current_plan is not None else {}
+        plan = {
+            drone_id: current[drone_id].model_copy(deep=True)
+            if drone_id in current else Objective(
+                drone_id=drone_id, objective_type=ObjectiveType.HOLD
+            )
+            for drone_id in state.drones
+        }
+        targets = {target.position: target for target in state.discovered_targets.values()}
+        for event in state.latest_events:
+            detected = re.fullmatch(
+                r"Drone (.+) detected a target at \((-?\d+),\s*(-?\d+)\)",
+                event.description,
+            )
+            if detected is None:
+                continue
+            drone_id, row, col = detected.groups()
+            target = targets.get((int(row), int(col)))
+            if drone_id in plan and target is not None:
+                plan[drone_id] = Objective(
+                    drone_id=drone_id, objective_type=ObjectiveType.GOTO,
+                    target_id=target.target_id,
+                )
+        return CommanderDecision(
+            objectives=list(plan.values()),
+            reason="Keep assignments; send detecting drones to their discovered targets.",
+        )
 
 
 class OpenAICommanderPolicy:
@@ -165,7 +178,8 @@ def validate_decision(
 
 
 def mission_team(
-    mission_state: MissionState, map: list[list[Terrain]], sectors: dict[str, Sector]
+    mission_state: MissionState, map: list[list[Terrain]], sectors: dict[str, Sector],
+    *, policy: CommanderPolicy | None = None,
 ) -> MissionState:
     update_no_fly_zones(mission_state)
     update_completed_sectors(mission_state)
@@ -181,7 +195,7 @@ def mission_team(
     ):
         return mission_state
     mission_commander = MissionCommander(
-        policy=OpenAICommanderPolicy(),
+        policy=policy if policy is not None else OpenAICommanderPolicy(),
     )
     observation = CommanderObservation(
         mission_state=mission_state, world=map, sectors=sectors
