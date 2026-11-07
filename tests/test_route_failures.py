@@ -28,20 +28,20 @@ class RouteFailureTest(unittest.TestCase):
         self.assertEqual(
             controller.failure_event, "Drone 0 cannot reach target target at (0, 2)"
         )
-        self.assertIsNone(controller.next_action())
+        self.assertIsNone(controller.plan_step())
         drones = initialize_drone_states([(0, 0)], 25.0)
         simulator = Simulator(terrain, drones, [])
         event, _, _, step = simulator.execute_plan(
             {"0": objective}, {"battery_reserve_threshold": 0.0}, {}, targets
         )
-        self.assertEqual(event, "Drone 0 cannot reach target target at (0, 2)")
+        self.assertEqual(event, ["Drone 0 cannot reach target target at (0, 2)"])
         self.assertEqual(step, 0)
         self.assertEqual(drones["0"].position, (0, 0))
         controller.update_map([[Terrain.EMPTY] * 3])
         controller.update_objective(objective)
         self.assertIsNone(controller.failure_event)
         self.assertEqual(controller.route, [(0, 1), (0, 1)])
-        self.assertEqual(controller.next_action(), (0, 1))
+        self.assertEqual(controller.plan_step(), (0, 1))
 
     def test_search_tries_other_cells_when_nearest_is_unreachable(self):
         empty, blocked = Terrain.EMPTY, Terrain.OBSTACLE
@@ -66,8 +66,9 @@ class RouteFailureTest(unittest.TestCase):
         self.assertEqual(position, (2, 1))
 
     def test_unreachable_search_is_not_reported_as_exhausted(self):
-        terrain = [[Terrain.EMPTY, Terrain.OBSTACLE, Terrain.EMPTY]]
-        sectors = {"sector": Sector(sector_id="sector", bounds=((0, 0), (0, 2)))}
+        # Unreachable cells must also be beyond the initial sensor radius.
+        terrain = [[Terrain.EMPTY, Terrain.OBSTACLE] + [Terrain.EMPTY] * 4]
+        sectors = {"sector": Sector(sector_id="sector", bounds=((0, 0), (0, 5)))}
         drones = initialize_drone_states([(0, 0)], 25.0)
         simulator = Simulator(terrain, drones, [])
         event, _, _, step = simulator.execute_plan(
@@ -85,7 +86,7 @@ class RouteFailureTest(unittest.TestCase):
         )
         self.assertEqual(
             event,
-            "Drone 0 cannot search sector sector: remaining cells are unreachable",
+            ["Drone 0 cannot search sector sector: remaining cells are unreachable"],
         )
         self.assertEqual(step, 0)
 
@@ -104,7 +105,7 @@ class RouteFailureTest(unittest.TestCase):
                 controller.update_objective(objective)
                 self.assertEqual(controller.route, [])
                 self.assertIsNone(controller.failure_event)
-                self.assertIsNone(controller.next_action())
+                self.assertIsNone(controller.plan_step())
 
 
 if __name__ == "__main__":

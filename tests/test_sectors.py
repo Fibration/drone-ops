@@ -60,7 +60,7 @@ class SectorTest(unittest.TestCase):
             )
         )
         self.assertTrue(controller.route)
-        self.assertEqual(controller.next_action(), (1, 0))
+        self.assertEqual(controller.plan_step(), (1, 0))
 
 
 if __name__ == "__main__":

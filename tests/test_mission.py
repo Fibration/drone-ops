@@ -58,17 +58,18 @@ class MissionIntegrationTest(unittest.TestCase):
         def commander(state):
             nonlocal zone_added
             self.assertLess(len(state.events), 200, "Mission did not terminate")
-            latest = state.events[-1]
-            if latest.description == zone_event:
+            latest = [event.description for event in state.latest_events]
+            if zone_event in latest:
                 self.assertEqual(state.step, 5)
                 self.assertFalse(zone_added, "Scenario event repeated")
                 for row, col in zone:
                     self.assertEqual(simulator.map[row][col], Terrain.NO_FLY_ZONE)
                 zone_added = True
             if zone_added:
-                self.assertNotIn("entered a no-fly zone", latest.description)
-                for drone in state.drones.values():
-                    self.assertNotIn(drone.position, zone)
+                self.assertFalse(any("entered a no-fly zone" in event for event in latest))
+                if zone_event not in latest:
+                    for drone in state.drones.values():
+                        self.assertNotIn(drone.position, zone)
             result = naive_mission_commander(state)
             if zone_added:
                 known_zones = {

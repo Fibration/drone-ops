@@ -1,12 +1,5 @@
 from src.drone import DroneController
-from src.models import (
-    DroneState,
-    Objective,
-    ObjectiveType,
-    Sector,
-    Target,
-    IncidentType,
-)
+from src.models import DroneState, Objective, ObjectiveType, Sector, Target, IncidentType
 from src.map import Terrain, no_fly_zone_from_event
 from src.parameters import BASE_POSITION, sensor_range, monitoring_interval
 
@@ -17,14 +10,15 @@ class Simulator:
         map: list[list[Terrain]],
         drones: dict[str, DroneState],
         targets: list[tuple[int, int]],
-        scenario: dict[int, tuple[IncidentType, str]] = {},
+        scenario: dict[int, tuple[IncidentType, str]] | None = None,
     ):
         self.map = map
         self.drones = drones
-        self.event = None
         self.timestep = 0
         self.targets = targets
-        self.scenario = scenario
+        self.scenario = scenario or {}
+        self._initial_observations_complete = False
+        self._completed_sectors: set[str] = set()
         self._reported_empty_batteries = {
             drone_id for drone_id, drone in drones.items() if drone.battery <= 0
         }
@@ -34,6 +28,102 @@ class Simulator:
             for drone_id, drone in drones.items()
         }
 
+    def _observe(self, position: tuple[int, int], explored_cells: set[tuple[int, int]]):
+        row, col = position
+        for r in range(max(0, row - sensor_range), min(len(self.map), row + sensor_range + 1)):
+            for c in range(max(0, col - sensor_range), min(len(self.map[r]), col + sensor_range + 1)):
+                if (r - row) ** 2 + (c - col) ** 2 <= sensor_range**2:
+                    explored_cells.add((r, c))
+
+    def _sector_completion_events(
+        self, sectors: dict[str, Sector], explored_cells: set[tuple[int, int]]
+    ) -> list[str]:
+        events = []
+        for sector_id, sector in sectors.items():
+            if sector_id in self._completed_sectors:
+                continue
+            (top, left), (bottom, right) = sector.bounds
+            if all(
+                (row, col) in explored_cells
+                or self.map[row][col] in (Terrain.OBSTACLE, Terrain.NO_FLY_ZONE)
+                for row in range(top, bottom + 1)
+                for col in range(left, right + 1)
+            ):
+                self._completed_sectors.add(sector_id)
+                events.append(f"Sector {sector_id} fully explored")
+        return events
+
+    def _apply_incident(self) -> list[str]:
+        incident = self.scenario.get(self.timestep)
+        if incident is None:
+            return []
+        incident_type, payload = incident
+        if incident_type == IncidentType.NEW_NO_FLY_ZONE:
+            zone = no_fly_zone_from_event(payload)
+            if zone is not None:
+                if any(row >= len(self.map) or col >= len(self.map[row]) for row, col in zone):
+                    raise ValueError("No-fly zone must be within the terrain map")
+                for row, col in zone:
+                    self.map[row][col] = Terrain.NO_FLY_ZONE
+            return [payload]
+        drone = self.drones[payload]
+        if incident_type == IncidentType.BATTERY_DRAIN:
+            drone.battery = max(0.0, drone.battery - 10)
+            if drone.battery <= 0:
+                self.controllers[payload].update_objective(
+                    Objective(drone_id=payload, objective_type=ObjectiveType.HOLD)
+                )
+        elif incident_type == IncidentType.COMMS_FAILURE:
+            drone.comms = False
+        return []  # Battery and communications incidents are silent.
+
+    def _empty_battery_event(self, drone_id: str) -> list[str]:
+        drone = self.drones[drone_id]
+        if drone.battery <= 0 and drone_id not in self._reported_empty_batteries:
+            self._reported_empty_batteries.add(drone_id)
+            return [f"Drone {drone_id} ran out of battery at {drone.position}"]
+        return []
+
+    def _monitor_events(self, monitoring_checks) -> list[str]:
+        if self.timestep % monitoring_interval:
+            return []
+        events = []
+        for drone_id, drone in self.drones.items():
+            events.extend(self._empty_battery_event(drone_id))
+            if 0 < drone.battery < monitoring_checks["battery_reserve_threshold"]:
+                events.append(f"Drone {drone_id} battery low {drone.battery} at {drone.position}")
+            if not drone.comms:
+                events.append(f"Drone {drone_id} lost communication at {drone.position}")
+        return events
+
+    def _movement_events(self, drone_id: str) -> list[str]:
+        drone = self.drones[drone_id]
+        row, col = drone.position
+        if not (0 <= row < len(self.map) and 0 <= col < len(self.map[row])):
+            return [f"Drone {drone_id} moved out of bounds at {drone.position}"]
+        terrain = self.map[row][col]
+        returning = self.controllers[drone_id].objective.objective_type == ObjectiveType.RETURN_TO_BASE
+        events = []
+        if terrain == Terrain.OBSTACLE:
+            events.append(f"Drone {drone_id} hit an obstacle at {drone.position}")
+        elif terrain == Terrain.NO_FLY_ZONE:
+            events.append(f"Drone {drone_id} entered a no-fly zone at {drone.position}")
+        elif terrain == Terrain.DRONE and not (returning and drone.position == BASE_POSITION):
+            events.append(f"Drone {drone_id} collided with another drone at {drone.position}")
+        else:
+            if terrain == Terrain.TARGET:
+                events.append(f"Drone {drone_id} reached the target at {drone.position}")
+            else:
+                events.extend(
+                    f"Drone {drone_id} detected a target at {target}"
+                    for target in self.targets
+                    if (row - target[0]) ** 2 + (col - target[1]) ** 2 <= sensor_range**2
+                )
+            if returning and drone.position == BASE_POSITION:
+                events.append(f"Drone {drone_id} returned to base at {BASE_POSITION}")
+        events.extend(self._empty_battery_event(drone_id))
+        return events
+
     def execute_plan(
         self,
         plan: dict[str, Objective],
@@ -41,18 +131,22 @@ class Simulator:
         sectors: dict[str, Sector],
         targets: dict[str, Target],
         explored_cells: set[tuple[int, int]] | None = None,
-    ) -> tuple[str, dict[str, DroneState], set[tuple[int, int]], int]:
-        self.event = None
+    ) -> tuple[list[str], dict[str, DroneState], set[tuple[int, int]], int]:
+        """Advance until a whole step produces events, returning them together."""
         if explored_cells is None:
             explored_cells = set()
-        controllers = self.controllers
-        for drone_id, controller in controllers.items():
+        if not self._initial_observations_complete:
+            for drone in self.drones.values():
+                if drone.battery > 0:
+                    self._observe(drone.position, explored_cells)
+            self._initial_observations_complete = True
+        events = self._sector_completion_events(sectors, explored_cells)
+        for drone_id, controller in self.controllers.items():
             drone = self.drones[drone_id]
             controller.update_position(drone.position)
+            controller.update_comms(drone.comms)
             if drone.battery <= 0:
-                controller.update_objective(
-                    Objective(drone_id=drone_id, objective_type=ObjectiveType.HOLD)
-                )
+                controller.update_objective(Objective(drone_id=drone_id, objective_type=ObjectiveType.HOLD))
                 continue
             if not drone.comms:
                 continue
@@ -60,205 +154,62 @@ class Simulator:
             controller.update_explored_cells(explored_cells)
             controller.sectors = sectors
             controller.targets = targets
-            objective = plan.get(drone_id)
-            if objective is None:
-                objective = Objective(
-                    drone_id=drone_id, objective_type=ObjectiveType.HOLD
-                )
-            controller.update_objective(objective)
+            controller.update_objective(plan.get(drone_id) or Objective(
+                drone_id=drone_id, objective_type=ObjectiveType.HOLD
+            ))
             if controller.failure_event is not None:
-                return (
-                    controller.failure_event,
-                    self.drones,
-                    explored_cells,
-                    self.timestep,
-                )
+                events.append(controller.failure_event)
 
-        while not self.event:
+        while not events:
             actions = {}
-            for drone_id, controller in controllers.items():
+            for drone_id, controller in self.controllers.items():
                 drone = self.drones[drone_id]
                 if drone.battery <= 0:
                     continue
                 controller.update_position(drone.position)
+                controller.update_comms(drone.comms)
                 if drone.comms:
                     controller.update_explored_cells(explored_cells)
-                step = controller.next_action(allow_replan=drone.comms, consume=False)
+                step = controller.plan_step()
                 if controller.failure_event is not None:
-                    return (
-                        controller.failure_event,
-                        self.drones,
-                        explored_cells,
-                        self.timestep,
-                    )
-                if step is not None:
+                    events.append(controller.failure_event)
+                elif step is not None:
                     actions[drone_id] = step
+            if events:
+                break
             if not actions:
-                self.event = "Mission plan exhausted"
+                events.append("Mission plan exhausted")
                 break
 
             self.timestep += 1
-            monitor = self.timestep % monitoring_interval == 0
-            if self.timestep in self.scenario:
-                incident, event = self.scenario[self.timestep]
-                if incident == IncidentType.NEW_NO_FLY_ZONE:
-                    self.event = event
-                    zone = no_fly_zone_from_event(self.event)
-                    if zone is not None:
-                        if any(
-                            row >= len(self.map) or col >= len(self.map[row])
-                            for row, col in zone
-                        ):
-                            raise ValueError(
-                                "No-fly zone must be within the terrain map"
-                            )
-                        for row, col in zone:
-                            self.map[row][col] = Terrain.NO_FLY_ZONE
-                    return (
-                        self.event,
-                        self.drones,
-                        explored_cells,
-                        self.timestep,
-                    )
-                if incident == IncidentType.BATTERY_DRAIN:
-                    affected_drone_id = event
-                    drone = self.drones[affected_drone_id]
-                    drone.battery = max(0.0, drone.battery - 10)
-                    if drone.battery <= 0:
-                        self.controllers[affected_drone_id].update_objective(
-                            Objective(
-                                drone_id=affected_drone_id,
-                                objective_type=ObjectiveType.HOLD,
-                            )
-                        )
-                        actions.pop(affected_drone_id, None)
-                if incident == IncidentType.COMMS_FAILURE:
-                    affected_drone_id = event
-                    drone = self.drones[affected_drone_id]
-                    drone.comms = False
+            events = self._apply_incident()
+            if events:
+                # A new flight restriction pauses before executing stale routes.
+                events.extend(self._sector_completion_events(sectors, explored_cells))
+                events.extend(self._monitor_events(monitoring_checks))
+                break
 
+            moved = []
             for drone_id, step in actions.items():
                 drone = self.drones[drone_id]
-                if drone:
-                    drone.position = (
-                        drone.position[0] + step[0],
-                        drone.position[1] + step[1],
+                if drone.battery <= 0:
+                    continue
+                controller = self.controllers[drone_id]
+                position = drone.position[0] + step[0], drone.position[1] + step[1]
+                controller.apply_step(position)
+                drone.position = position
+                drone.battery = max(0.0, drone.battery - 1)
+                self._observe(drone.position, explored_cells)
+                moved.append(drone_id)
+
+            # Collect every drone's events after all movement and observations.
+            for drone_id in moved:
+                events.extend(self._movement_events(drone_id))
+                if self.drones[drone_id].battery <= 0:
+                    self.controllers[drone_id].update_objective(
+                        Objective(drone_id=drone_id, objective_type=ObjectiveType.HOLD)
                     )
-                    controller = controllers[drone_id]
-                    controller.next_action(allow_replan=False)
-                    controller.update_position(drone.position)
-                    drone.battery -= 1  # Decrease battery for each move
-                    if drone.battery <= 0:
-                        controller.update_objective(
-                            Objective(
-                                drone_id=drone_id, objective_type=ObjectiveType.HOLD
-                            )
-                        )
-                    row, col = drone.position
-                    for r in range(
-                        max(0, row - sensor_range),
-                        min(len(self.map), row + sensor_range + 1),
-                    ):
-                        for c in range(
-                            max(0, col - sensor_range),
-                            min(len(self.map[r]), col + sensor_range + 1),
-                        ):
-                            if (r - row) ** 2 + (c - col) ** 2 <= sensor_range**2:
-                                explored_cells.add((r, c))
-            # All moves and sensor observations belong to the same timestep.
-            for drone_id in actions:
-                drone = self.drones[drone_id]
-                if drone:
-                    row, col = drone.position
-                    if not (0 <= row < len(self.map) and 0 <= col < len(self.map[row])):
-                        self.event = (
-                            f"Drone {drone_id} moved out of bounds at {drone.position}"
-                        )
-                        break
-                    elif (
-                        self.map[drone.position[0]][drone.position[1]]
-                        == Terrain.OBSTACLE
-                    ):
-                        self.event = (
-                            f"Drone {drone_id} hit an obstacle at {drone.position}"
-                        )
-                        break
-                    elif (
-                        self.map[drone.position[0]][drone.position[1]]
-                        == Terrain.NO_FLY_ZONE
-                    ):
-                        self.event = f"Drone {drone_id} entered a no-fly zone at {drone.position}"
-                        break
-                    elif (
-                        self.map[drone.position[0]][drone.position[1]] == Terrain.TARGET
-                    ):
-                        self.event = (
-                            f"Drone {drone_id} reached the target at {drone.position}"
-                        )
-                        break
-                    elif self.map[drone.position[0]][
-                        drone.position[1]
-                    ] == Terrain.DRONE and not (
-                        controllers[drone_id].objective.objective_type
-                        == ObjectiveType.RETURN_TO_BASE
-                        and drone.position == BASE_POSITION
-                    ):
-                        self.event = f"Drone {drone_id} collided with another drone at {drone.position}"
-                        break
-                    elif drone.battery <= 0:
-                        self._reported_empty_batteries.add(drone_id)
-                        self.event = (
-                            f"Drone {drone_id} ran out of battery at {drone.position}"
-                        )
-                        break
-                    else:
-                        if (
-                            controllers[drone_id].objective.objective_type
-                            == ObjectiveType.RETURN_TO_BASE
-                            and drone.position == BASE_POSITION
-                        ):
-                            self.event = (
-                                f"Drone {drone_id} returned to base at {BASE_POSITION}"
-                            )
-                            break
-                        detected_target = next(
-                            (
-                                target
-                                for target in self.targets
-                                if (drone.position[0] - target[0]) ** 2
-                                + (drone.position[1] - target[1]) ** 2
-                                <= sensor_range**2
-                            ),
-                            None,
-                        )
-                        if detected_target is not None:
-                            self.event = f"Drone {drone_id} detected a target at {detected_target}"
-                            break
+            events.extend(self._monitor_events(monitoring_checks))
+            events.extend(self._sector_completion_events(sectors, explored_cells))
 
-                    if monitor:
-                        if (
-                            drone.battery
-                            < monitoring_checks["battery_reserve_threshold"]
-                        ):
-                            self.event = f"Drone {drone_id} battery low {drone.battery} at {drone.position}"
-                            break
-                        elif drone.comms is False:
-                            self.event = f"Drone {drone_id} lost communication at {drone.position}"
-                            break
-
-            # A silently depleted drone no longer moves, but monitoring can
-            # still discover its battery state while the rest of the fleet flies.
-            if monitor and not self.event:
-                for drone_id, drone in self.drones.items():
-                    if (
-                        drone.battery <= 0
-                        and drone_id not in self._reported_empty_batteries
-                    ):
-                        self._reported_empty_batteries.add(drone_id)
-                        self.event = (
-                            f"Drone {drone_id} ran out of battery at {drone.position}"
-                        )
-                        break
-
-        assert self.event is not None
-        return self.event, self.drones, explored_cells, self.timestep
+        return events, self.drones, explored_cells, self.timestep

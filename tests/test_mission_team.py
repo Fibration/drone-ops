@@ -41,24 +41,29 @@ class MissionTeamTest(unittest.TestCase):
         def team(state):
             nonlocal zone_seen
             self.assertLess(len(state.events), 30, "Mission did not terminate")
-            latest = state.events[-1].description
-            if latest == zone_event:
+            self.assertTrue(state.latest_events)
+            self.assertEqual(state.events[-len(state.latest_events):], state.latest_events)
+            for event in state.latest_events:
+                self.assertEqual(event.drones, state.drones)
+            latest = [event.description for event in state.latest_events]
+            if zone_event in latest:
                 zone_seen = True
                 self.assertEqual(state.step, 5)
                 for row, col in zone:
                     self.assertEqual(simulator.map[row][col], Terrain.NO_FLY_ZONE)
             if zone_seen:
-                self.assertNotIn("entered a no-fly zone", latest)
-                for drone in state.drones.values():
-                    self.assertNotIn(drone.position, zone)
+                self.assertFalse(any("entered a no-fly zone" in event for event in latest))
+                if zone_event not in latest:
+                    for drone in state.drones.values():
+                        self.assertNotIn(drone.position, zone)
             before = calls
             target_count = len(state.discovered_targets)
             previous_plan = state.current_plan
             result = mission_team(state, terrain, sectors)
-            if latest == "Mission plan exhausted":
+            if "Mission plan exhausted" in latest:
                 self.assertEqual(calls, before, "Exhaustion should not call the API")
             elif (
-                "detected a target" in latest
+                all("detected a target" in event for event in latest)
                 and len(result.discovered_targets) == target_count
             ):
                 self.assertEqual(calls, before, "Known target should not call the API")
@@ -100,17 +105,18 @@ class MissionTeamTest(unittest.TestCase):
     def replay_response(**kwargs):
         state = json.loads(kwargs["input"][1]["content"])["mission_state"]
         objectives = dict(state["current_plan"]["plan"])
-        latest = state["events"][-1]["description"]
-        if "detected a target" in latest:
-            drone_id = latest.split()[1]
-            objectives[drone_id] = {
-                "drone_id": drone_id,
-                "objective_type": "goto",
-                "target_id": next(iter(state["discovered_targets"])),
-            }
-        elif "reached the target" in latest:
-            drone_id = latest.split()[1]
-            objectives[drone_id] = {"drone_id": drone_id, "objective_type": "hold"}
+        for event in state["latest_events"]:
+            description = event["description"]
+            if "detected a target" in description:
+                drone_id = description.split()[1]
+                objectives[drone_id] = {
+                    "drone_id": drone_id,
+                    "objective_type": "goto",
+                    "target_id": next(iter(state["discovered_targets"])),
+                }
+            elif "reached the target" in description:
+                drone_id = description.split()[1]
+                objectives[drone_id] = {"drone_id": drone_id, "objective_type": "hold"}
         decision = CommanderDecision(
             objectives=list(objectives.values()), reason="Replay"
         )
@@ -118,8 +124,12 @@ class MissionTeamTest(unittest.TestCase):
 
     def test_scenario_with_mocked_structured_responses(self):
         result, calls = self.run_scenario(self.replay_response)
-        self.assertEqual(calls, 3)
-        self.assertEqual(result.step, 14)
+        self.assertEqual(calls, 5)
+        self.assertEqual(result.step, 22)
+        self.assertEqual(
+            {e.description for e in result.events if e.description.startswith("Sector ")},
+            {"Sector 0 fully explored", "Sector 1 fully explored"},
+        )
 
     def test_unknown_sector_is_rejected_before_execution(self):
         def invalid_response(**kwargs):

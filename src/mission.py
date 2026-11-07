@@ -1,4 +1,3 @@
-from src.mission_commander import MissionCommander
 from src.simulator import Simulator
 from src.map import Terrain, extract_from_raw
 from src.models import (
@@ -138,6 +137,7 @@ def mission(
         discovered_targets={},
         events=[],
         explored_cells=set(),
+        completed_sectors=set(),
         current_plan=initial_plan,
         proposed_action=None,
         next_agent=None,
@@ -166,7 +166,7 @@ def mission(
                 elif objective.objective_type == ObjectiveType.RETURN_TO_BASE:
                     drone.assignment = f"return to base at {BASE_POSITION}"
 
-        event, updated_drones, explored_cells, timestep = simulator.execute_plan(
+        events, updated_drones, explored_cells, timestep = simulator.execute_plan(
             plan.plan,
             monitoring_checks,
             sectors,
@@ -176,7 +176,7 @@ def mission(
         mission_state.explored_cells = explored_cells
         mission_state.drones = updated_drones
         mission_state.step = timestep
-        mission_state.events.append(
+        mission_state.latest_events = [
             MissionEvent(
                 description=event,
                 drones={
@@ -184,7 +184,9 @@ def mission(
                     for drone_id, drone in updated_drones.items()
                 },
             )
-        )
+            for event in events
+        ]
+        mission_state.events.extend(mission_state.latest_events)
         mission_state = mission_team(mission_state)
 
     return mission_state

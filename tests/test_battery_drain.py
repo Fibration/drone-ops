@@ -26,13 +26,13 @@ class BatteryDrainTest(unittest.TestCase):
                 self.assertEqual(step, 5)
                 self.assertEqual(drones["1"].battery, 20.0)
                 if initial_battery <= 10:
-                    self.assertEqual(event, "Drone 0 ran out of battery at (0, 10)")
+                    self.assertEqual(event, ["Drone 0 ran out of battery at (0, 10)"])
                     self.assertEqual(drones["0"].position, (0, 10))
                     self.assertEqual(drones["0"].battery, 0.0)
                     self.assertEqual(simulator.controllers["0"].objective.objective_type,
                                      ObjectiveType.HOLD)
                 else:
-                    self.assertEqual(event, "Drone 0 battery low 10.0 at (0, 5)")
+                    self.assertEqual(event, ["Drone 0 battery low 10.0 at (0, 5)"])
                     self.assertEqual(drones["0"].battery, 10.0)
                     self.assertEqual(drones["0"].position, (0, 5))
                 self.assertEqual(simulator.controllers["1"].objective.objective_type,
@@ -41,7 +41,7 @@ class BatteryDrainTest(unittest.TestCase):
                 resumed_event, _, _, _ = simulator.execute_plan(
                     plan, {"battery_reserve_threshold": 0.0}, {}, {},
                 )
-                self.assertIn("returned to base", resumed_event)
+                self.assertTrue(any("returned to base" in event for event in resumed_event))
                 self.assertEqual(drones["0"].battery,
                                  0.0 if initial_battery <= 10 else 5.0)
                 if initial_battery <= 10:

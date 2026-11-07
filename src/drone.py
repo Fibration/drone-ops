@@ -17,11 +17,13 @@ class DroneController:
         self.objective = Objective(drone_id=drone_id, objective_type=ObjectiveType.HOLD)
         self.map = map
         self.position = position
+        self.comms = True
         self.explored_cells: set[tuple[int, int]] = set()
         self.route: list[tuple[int, int]] = []
         self.route_index = 0
         self.to_explore: list[tuple[int, int]] = []
         self.failure_event: str | None = None
+        self._planned_step: tuple[int, int] | None = None
         self.sectors = sectors
         self.targets = targets
 
@@ -32,6 +34,9 @@ class DroneController:
     def update_position(self, position: tuple[int, int]):
         self.position = position
 
+    def update_comms(self, comms: bool):
+        self.comms = comms
+
     def update_map(self, map: list[list[Terrain]]):
         self.map = map
 
@@ -41,6 +46,7 @@ class DroneController:
     def calculate_route(self) -> list[tuple[int, int]]:
         self.route = []
         self.route_index = 0
+        self._planned_step = None
         self.failure_event = None
         objective_type = self.objective.objective_type
         if objective_type == ObjectiveType.HOLD:
@@ -96,20 +102,30 @@ class DroneController:
             self.route = result
         return self.route
 
-    def next_action(
-        self, *, allow_replan: bool = True, consume: bool = True
-    ) -> tuple[int, int] | None:
+    def plan_step(self) -> tuple[int, int] | None:
+        """Choose a relative move without consuming it; repeated calls are stable."""
+        if self._planned_step is not None:
+            return self._planned_step
         if self.failure_event is not None:
             return None
         if self.route_index >= len(self.route):
             if (
-                allow_replan
+                self.comms
                 and self.objective.objective_type == ObjectiveType.SEARCH_SECTOR
             ):
                 self.calculate_route()
             if self.route_index >= len(self.route):
                 return None
-        next_step = self.route[self.route_index]
-        if consume:
-            self.route_index += 1
-        return next_step
+        self._planned_step = self.route[self.route_index]
+        return self._planned_step
+
+    def apply_step(self, position: tuple[int, int]) -> None:
+        """Confirm the planned move using the resulting absolute position."""
+        if self._planned_step is None:
+            raise ValueError("No step has been planned")
+        dr, dc = self._planned_step
+        if position != (self.position[0] + dr, self.position[1] + dc):
+            raise ValueError("Position does not match the planned step")
+        self.position = position
+        self.route_index += 1
+        self._planned_step = None

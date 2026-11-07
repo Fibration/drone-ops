@@ -26,7 +26,7 @@ class CommsFailureTest(unittest.TestCase):
 
         # Failure at step 2 is silent; the first notification is monitoring at 5.
         self.assertEqual(step, 5)
-        self.assertEqual(event, "Drone 0 lost communication at (0, 5)")
+        self.assertEqual(event, ["Drone 0 lost communication at (0, 5)"])
         self.assertFalse(drones["0"].comms)
         self.assertTrue(drones["1"].comms)
         self.assertEqual(drones["0"].battery, 20.0)
@@ -37,7 +37,7 @@ class CommsFailureTest(unittest.TestCase):
         event, _, explored, step = simulator.execute_plan(
             plan, {"battery_reserve_threshold": 0.0}, {}, targets, explored,
         )
-        self.assertEqual(event, "Mission plan exhausted")
+        self.assertEqual(event, ["Mission plan exhausted"])
         self.assertEqual(step, 8)
         self.assertIs(simulator.controllers["0"], controller)
         self.assertEqual(controller.objective, accepted)
@@ -50,7 +50,7 @@ class CommsFailureTest(unittest.TestCase):
         event, _, _, final_step = simulator.execute_plan(
             {"1": plan["1"]}, {"battery_reserve_threshold": 0.0}, {}, targets, explored,
         )
-        self.assertEqual(event, "Mission plan exhausted")
+        self.assertEqual(event, ["Mission plan exhausted"])
         self.assertEqual(final_step, step)
         self.assertEqual(drones["0"].position, (0, 8))
         self.assertEqual(drones["0"].battery, 17.0)

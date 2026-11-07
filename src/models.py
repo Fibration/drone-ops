@@ -1,4 +1,4 @@
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from typing import Literal
 from enum import Enum, auto
 
@@ -68,7 +68,10 @@ class MissionState(BaseModel):
     no_fly_zones: list[Region]
     discovered_targets: dict[str, Target]
     events: list[MissionEvent]
+    # Events returned together by the latest simulator step; events holds history.
+    latest_events: list[MissionEvent] = Field(default_factory=list)
     explored_cells: set[tuple[int, int]]
+    completed_sectors: set[str] = Field(default_factory=set)
 
     current_plan: MissionPlan | None
     proposed_action: Action | None
