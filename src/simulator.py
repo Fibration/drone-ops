@@ -1,5 +1,5 @@
 from src.drone import DroneController
-from src.models import DroneState, ObjectiveType, Sector, Target
+from src.models import DroneState, Objective, ObjectiveType, Sector, Target
 from src.map import Terrain, no_fly_zone_from_event
 from src.parameters import BASE_POSITION, sensor_range, monitoring_interval
 
@@ -18,10 +18,16 @@ class Simulator:
         self.timestep = 0
         self.targets = targets
         self.scenario = scenario
+        # Controllers start with HOLD and no previously delivered route.
+        self.controllers = {
+            drone_id: DroneController(drone_id, map, {}, {}) for drone_id in drones
+        }
+        for drone_id, controller in self.controllers.items():
+            controller.update_position(drones[drone_id].position)
 
     def execute_plan(
         self,
-        plan,
+        plan: dict[str, Objective],
         monitoring_checks,
         sectors: dict[str, Sector],
         targets: dict[str, Target],
@@ -30,40 +36,40 @@ class Simulator:
         self.event = None
         if explored_cells is None:
             explored_cells = set()
-        controllers = {}
-        for drone_id, objective in plan.items():
-            drone = self.drones.get(drone_id)
-            if drone is None:
+        controllers = self.controllers
+        for drone_id, controller in controllers.items():
+            drone = self.drones[drone_id]
+            controller.update_position(drone.position)
+            if drone.battery <= 0:
+                controller.update_objective(
+                    Objective(drone_id=drone_id, objective_type=ObjectiveType.HOLD)
+                )
                 continue
-            controller = DroneController(objective, sectors, targets)
-            if isinstance(objective, list):
-                controller.route = objective
-            else:
-                controller.calculate_route(self.map, drone.position, explored_cells)
-                if (
-                    objective.objective_type == ObjectiveType.RETURN_TO_BASE
-                    and controller.route is None
-                ):
-                    return (
-                        f"Drone {drone_id} cannot return to base at {BASE_POSITION}",
-                        self.drones, explored_cells, self.timestep,
-                    )
-            controllers[drone_id] = controller
+            if not drone.comms:
+                continue
+            controller.update_map(self.map)
+            controller.update_explored_cells(explored_cells)
+            controller.sectors = sectors
+            controller.targets = targets
+            objective = plan.get(drone_id)
+            if objective is None:
+                objective = Objective(drone_id=drone_id, objective_type=ObjectiveType.HOLD)
+            controller.update_objective(objective)
+            if controller.failure_event is not None:
+                return controller.failure_event, self.drones, explored_cells, self.timestep
 
         while not self.event:
             actions = {}
             for drone_id, controller in controllers.items():
-                step = controller.next_action()
-                if (
-                    step is None
-                    and not isinstance(controller.objective, list)
-                    and controller.objective.objective_type
-                    == ObjectiveType.SEARCH_SECTOR
-                ):
-                    controller.calculate_route(
-                        self.map, self.drones[drone_id].position, explored_cells
-                    )
-                    step = controller.next_action()
+                drone = self.drones[drone_id]
+                if drone.battery <= 0:
+                    continue
+                controller.update_position(drone.position)
+                if drone.comms:
+                    controller.update_explored_cells(explored_cells)
+                step = controller.next_action(allow_replan=drone.comms, consume=False)
+                if controller.failure_event is not None:
+                    return controller.failure_event, self.drones, explored_cells, self.timestep
                 if step is not None:
                     actions[drone_id] = step
             if not actions:
@@ -97,7 +103,14 @@ class Simulator:
                         drone.position[0] + step[0],
                         drone.position[1] + step[1],
                     )
+                    controller = controllers[drone_id]
+                    controller.next_action(allow_replan=False)
+                    controller.update_position(drone.position)
                     drone.battery -= 1  # Decrease battery for each move
+                    if drone.battery <= 0:
+                        controller.update_objective(Objective(
+                            drone_id=drone_id, objective_type=ObjectiveType.HOLD
+                        ))
                     row, col = drone.position
                     for r in range(
                         max(0, row - sensor_range),

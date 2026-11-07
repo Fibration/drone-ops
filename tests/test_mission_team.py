@@ -8,7 +8,9 @@ from src.client import client
 from src.map import Terrain, extract_from_raw
 from src.mission import RAW_MAP, create_sectors, mission
 from src.mission_commander import mission_team
-from src.models import CommanderDecision, Objective, ObjectiveType, MissionStatus
+from src.models import (
+    CommanderDecision, Objective, ObjectiveType, MissionStatus,
+)
 from src.simulator import Simulator
 from src.utility import initialize_drone_states
 

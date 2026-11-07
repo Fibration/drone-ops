@@ -21,7 +21,6 @@ def initialize_drone_states(
             status="green",
             comms=True,
             assignment=None,
-            route=[],
         )
         for i, position in enumerate(drones)
     }

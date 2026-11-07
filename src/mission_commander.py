@@ -65,7 +65,6 @@ def naive_mission_commander(mission_state: MissionState) -> MissionState:
                 target_id=target.target_id,
             )
             mission_state.drones[drone_id].assignment = f"go to {target.position}"
-            mission_state.drones[drone_id].route = []
 
     return mission_state
 

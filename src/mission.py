@@ -118,8 +118,9 @@ def mission(
         }
     )
     for drone_id in initial_plan.plan:
+        if not drones[drone_id].comms:
+            continue
         drones[drone_id].assignment = "search for targets"
-        drones[drone_id].route = []
 
     mission_state = MissionState(
         drones=drones,
@@ -154,8 +155,11 @@ def mission(
 
         simulator.drones = mission_state.drones
         for drone_id, drone in mission_state.drones.items():
+            if drone.battery <= 0:
+                continue
+            if not drone.comms:
+                continue
             objective = plan.plan.get(drone_id)
-            drone.route = objective.copy() if isinstance(objective, list) else []
             if isinstance(objective, Objective):
                 if objective.objective_type == ObjectiveType.HOLD:
                     drone.assignment = "hold position"

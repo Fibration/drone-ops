@@ -10,7 +10,6 @@ class DroneState(BaseModel):
     status: str
     comms: bool
     assignment: str | None
-    route: list[tuple[int, int]]
 
 
 class MissionStatus(Enum):

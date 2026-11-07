@@ -46,10 +46,12 @@ class SectorTest(unittest.TestCase):
     def test_controller_routes_with_sector_dictionary(self):
         _, terrain, _, _ = extract_from_raw(RAW_MAP)
         sectors = {"west": Sector(sector_id="west", bounds=((0, 0), (5, 3)))}
-        controller = DroneController(Objective(
+        controller = DroneController("0", terrain, sectors, {})
+        controller.update_position((0, 0))
+        controller.update_explored_cells({(0, 0)})
+        controller.update_objective(Objective(
             drone_id="0", objective_type=ObjectiveType.SEARCH_SECTOR, sector_id="west"
-        ), sectors, {})
-        controller.calculate_route(terrain, (0, 0), {(0, 0)})
+        ))
         self.assertTrue(controller.route)
         self.assertEqual(controller.next_action(), (1, 0))
 

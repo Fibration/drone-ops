@@ -1,6 +1,15 @@
 from heapq import heappop, heappush
+from dataclasses import dataclass
 
 from src.map import Terrain
+
+
+@dataclass(frozen=True)
+class NoRouteFound:
+    """An expected outcome when no traversable route connects the endpoints."""
+
+    start: tuple[int, int]
+    end: tuple[int, int]
 
 
 def astar(
@@ -9,8 +18,8 @@ def astar(
     end: tuple[int, int],
     *,
     allow_occupied_end: bool = False,
-) -> list[tuple[int, int]] | None:
-    """Return shortest cardinal (row, column) steps, or None if unreachable.
+) -> list[tuple[int, int]] | NoRouteFound:
+    """Return shortest cardinal steps, or NoRouteFound if unreachable.
 
     Obstacles, no-fly zones, and other drones block travel. The starting
     cell may be blocked to allow recovery after an event. An identical
@@ -30,7 +39,7 @@ def astar(
         )
 
     if is_blocked(end):
-        return None
+        return NoRouteFound(start, end)
 
     end_row, end_col = end
     frontier = [(abs(start[0] - end_row) + abs(start[1] - end_col), 0, start)]
@@ -65,4 +74,4 @@ def astar(
                 parents[neighbor] = current
                 priority = next_cost + abs(nr - end_row) + abs(nc - end_col)
                 heappush(frontier, (priority, -next_cost, neighbor))
-    return None
+    return NoRouteFound(start, end)
