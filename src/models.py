@@ -20,44 +20,6 @@ class DroneState(BaseModel):
     assignment: str | None
 
 
-class TelemetryField(str, Enum):
-    BATTERY_LEVEL = "battery_level"
-    POSITION = "position"
-    COMMS = "comms"
-    STATUS = "status"
-    ASSIGNMENT = "assignment"
-
-
-class TelemetryRequest(BaseModel):
-    field: TelemetryField
-    drone_ids: list[str] | None = None
-    at_step: int | None = Field(default=None, ge=0)
-    history: bool = False
-
-
-class TelemetryReading(BaseModel):
-    drone_id: str
-    step: int
-    field: TelemetryField
-    value: bool | float | tuple[int, int] | str | None
-
-
-class TelemetryResult(BaseModel):
-    request: TelemetryRequest
-    readings: dict[str, list[TelemetryReading]]
-
-
-class TelemetryCapability(BaseModel):
-    field: TelemetryField
-    description: str
-    history_available: bool = True
-
-
-class TelemetrySnapshot(BaseModel):
-    step: int
-    drones: dict[str, DroneState]
-
-
 class MissionStatus(Enum):
     ONGOING = "ongoing"
     SUCCESS = "success"
@@ -92,13 +54,6 @@ class Target(BaseModel):
     position: tuple[int, int]
 
 
-class MissionEvent(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    description: str
-    step: int = 0
-
-
 class MissionPlan(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -118,51 +73,9 @@ class AgentType(str, Enum):
     SAFETY_REVIEWER = "SAFETY_REVIEWER"
 
 
-class Evaluation(BaseModel):
-    decision: str
-    reason: str
-
-
-class MissionState(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    drone_ids: list[str]
-    objectives: list[Objective]
-    no_fly_zones: list[Region]
-    discovered_targets: dict[str, Target]
-    events: list[MissionEvent]
-    # Events returned together by the latest simulator step; events holds history.
-    latest_events: list[MissionEvent] = Field(default_factory=list)
-    explored_cells: set[tuple[int, int]]
-    completed_sectors: set[str] = Field(default_factory=set)
-    telemetry: list[TelemetryResult] = Field(default_factory=list)
-    available_telemetry: list[TelemetryCapability] = Field(default_factory=list)
-    telemetry_requests: list[TelemetryRequest] = Field(default_factory=list)
-    new_target_ids: set[str] = Field(default_factory=set)
-
-    current_plan: MissionPlan | None
-    proposed_plans: list[Plan]
-    under_review: Plan | None
-    needs_replan: bool = True
-
-    next_agent: AgentType | Literal["human_reviewer"] | None
-    safety_status: Evaluation | None
-    commander_rethink: Evaluation | None = None
-    human_approval: bool | None
-
-    step: int
-    mission_status: MissionStatus
-
-
 # class CommanderDecision(BaseModel):
 #     next_agent: Literal["fleet_monitor", "mission_planner", "safety_reviewer", "finish"]
 #     objective: str
-
-
-class CommanderObservation(BaseModel):
-    mission_state: MissionState
-    world: list[list[Terrain]]
-    sectors: dict[str, Sector]
 
 
 class CommanderDecision(BaseModel):
@@ -181,8 +94,112 @@ class IncidentType(Enum):
     COMMS_FAILURE = auto()
 
 
+type Point = tuple[int, int]
+
+
+class FreeWatchType(Enum):
+    NEW_TARGET_DETECTED = "NEW_TARGET_DETECTED"
+    DRONE_HARD_FAILURE = "DRONE_HARD_FAILURE"
+    MISSION_COMPLETE = "MISSION_COMPLETE"
+
+
+class WatchType(Enum):
+    RETURN_RESERVE_BELOW = "RETURN_RESERVE_BELOW"
+    BATTERY_DRAIN_ABOVE = "BATTERY_DRAIN_ABOVE"
+    CHARGE_ABOVE = "CHARGE_ABOVE"
+    COMMS_LOST_FOR = "COMMS_LOST_FOR"
+    WEATHER_AT_LEAST = "WEATHER_AT_LEAST"
+    WEATHER_FORECAST_RISK_ABOVE = "WEATHER_FORECAST_RISK_ABOVE"
+    ROUTE_UNREACHABLE = "ROUTE_UNREACHABLE"
+    ROUTE_COST_INCREASED_BY = "ROUTE_COST_INCREASED_BY"
+    SECTOR_COMPLETE = "SECTOR_COMPLETE"
+    TARGET_SURVIVAL_PROBABILITY_BELOW = "TARGET_SURVIVAL_PROBABILITY_BELOW"
+    TARGET_NOT_REACHED_BY = "TARGET_NOT_REACHED_BY"
+
+
+class WatchPredicate(BaseModel):
+    type: WatchType
+
+    drone_id: str | None = None
+    sector_id: str | None = None
+    target_id: str | None = None
+
+    threshold: float | int | str | None = None
+    horizon: int | None = None
+    decay_rate_prior: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+
+
+class WatchAlert(BaseModel):
+    """One selected-watch or free-watch trigger, with its affected entity."""
+    model_config = ConfigDict(extra="forbid")
+
+    type: WatchType | FreeWatchType
+    step: int = Field(ge=0)
+    drone_id: str | None = None
+    sector_id: str | None = None
+    target_id: str | None = None
+    position: Point | None = None
+    predicate: WatchPredicate | None = None
+    mission_status: MissionStatus | None = None
+
+
+class MonitoringPlan(BaseModel):
+    watches: list[WatchPredicate] = Field(min_length=3, max_length=3)
+    reason: str = Field(min_length=1)
+
+
+class ReviewOutcome(str, Enum):
+    APPROVE = "approve"
+    REPLAN = "replan"
+    RECONSIDER_PRIORITY = "reconsider_priority"
+
+
+class ReviewResult(BaseModel):
+    outcome: ReviewOutcome
+    critique: str
+    concerns: list[str]
+    mandatory_watches: list[WatchPredicate]
+
+
+class CommanderReviewOutcome(Enum):
+    REPLAN = "replan"
+    HUMAN_REQUIRED = "human_required"
+
+
+class MissionState(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    drone_ids: list[str]
+    objectives: list[Objective]
+    no_fly_zones: list[Region]
+    discovered_targets: dict[str, Target]
+    events: list[WatchAlert]
+    # Events returned together by the latest simulator step; events holds history.
+    latest_events: list[WatchAlert] = Field(default_factory=list)
+    explored_cells: set[tuple[int, int]]
+    completed_sectors: set[str] = Field(default_factory=set)
+    new_target_ids: set[str] = Field(default_factory=set)
+
+    current_plan: MissionPlan | None
+    monitoring_plan: MonitoringPlan | None = None
+    proposed_plans: list[Plan]
+    under_review: Plan | None
+    needs_replan: bool = True
+
+    next_agent: AgentType | Literal["human_reviewer"] | None
+    safety_status: ReviewResult | None
+    commander_rethink: CommanderReviewOutcome | None = None
+    human_approval: bool | None
+
+    step: int
+    mission_status: MissionStatus
+
+
 class Agent(Protocol):
     def run(self, state: MissionState) -> dict: ...
 
 
-type Point = tuple[int, int]
+class CommanderObservation(BaseModel):
+    mission_state: MissionState
+    world: list[list[Terrain]]
+    sectors: dict[str, Sector]

@@ -23,6 +23,22 @@ class Weather(Enum):
     BLIZZARD = 4
 
 
+def weather_transition_probabilities(current: int, desired: float) -> tuple[float, float]:
+    improve_probability = 0.2 if current > desired else 0.1
+    worsen_probability = 0.2 if current < desired else 0.1
+    return improve_probability, worsen_probability
+
+
+def next_weather_level(current: int, desired: float, transition: float) -> int:
+    """One persistence-biased weather transition, shared with forecasts."""
+    improve_probability, worsen_probability = weather_transition_probabilities(current, desired)
+    if transition < improve_probability:
+        return max(Weather.CLEAR.value, current - 1)
+    if transition < improve_probability + worsen_probability:
+        return min(Weather.BLIZZARD.value, current + 1)
+    return current
+
+
 class Sector:
     def __init__(
         self,
@@ -283,14 +299,7 @@ class World:
             current = levels[sector.sector_id]
             neighbour_average = neighbour_averages[sector.sector_id]
             desired = 0.5 * scenario_weather.value + 0.5 * neighbour_average
-            # Favor persistence and adjacent states, drifting toward the combined level.
-            improve_probability = 0.2 if current > desired else 0.1
-            worsen_probability = 0.2 if current < desired else 0.1
-            transition = random.random()
-            if transition < improve_probability:
-                sector.weather = Weather(max(Weather.CLEAR.value, current - 1))
-            elif transition < improve_probability + worsen_probability:
-                sector.weather = Weather(min(Weather.BLIZZARD.value, current + 1))
+            sector.weather = Weather(next_weather_level(current, desired, random.random()))
 
 
 @dataclass(frozen=True)

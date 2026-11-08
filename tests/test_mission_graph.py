@@ -3,12 +3,12 @@ from unittest.mock import Mock, patch
 
 from langgraph.graph import END
 
-from src.agent import MissionCommander, SafetyReviewer
+from src.agent import MissionCommander, MissionPlanner, SafetyReviewer
 from src.mission_graph import (
     HUMAN_REVIEW_NODE, build_mission_graph, route_commander,
     route_human_review, route_safety_review,
 )
-from src.models import AgentType, Evaluation, MissionPlan, MissionState, MissionStatus, Plan
+from src.models import AgentType, ReviewResult, ReviewOutcome, CommanderReviewOutcome, MissionPlan, MissionState, MissionStatus, Plan, MonitoringPlan, WatchPredicate, WatchType
 from src.policy import CommanderRoutingDecision
 
 
@@ -34,7 +34,7 @@ class MissionGraphTest(unittest.TestCase):
                         return {'mission_status': MissionStatus.SUCCESS, 'next_agent': None}
                     return {'next_agent': destination}
                 if name == AgentType.SAFETY_REVIEWER:
-                    return {'safety_status': Evaluation(decision=next(outcomes), reason='Review')}
+                    return {'safety_status': ReviewResult(outcome=next(outcomes), critique='Review', concerns=[], mandatory_watches=[])}
                 if name == HUMAN_REVIEW_NODE:
                     return {'human_approval': next(human_outcomes)}
                 return {}
@@ -58,12 +58,17 @@ class MissionGraphTest(unittest.TestCase):
              AgentType.MISSION_COMMANDER, AgentType.SAFETY_REVIEWER, AgentType.FLEET_MONITOR],
         )
         initial = self.state()
-        updates = list(build_mission_graph().compile().stream(initial))
+        monitor_policy = Mock()
+        monitor_policy.evaluate.return_value = MonitoringPlan(
+            watches=[WatchPredicate(type=WatchType.SECTOR_COMPLETE, sector_id=str(i)) for i in range(3)],
+            reason='Explicit test selection',
+        )
+        updates = list(build_mission_graph(fleet_monitor_policy=monitor_policy).compile().stream(initial))
         self.assertEqual([name for update in updates for name in update],
                          ['MISSION_COMMANDER', 'MISSION_PLANNER', 'MISSION_COMMANDER',
                           'SAFETY_REVIEWER', 'FLEET_MONITOR'])
         safety = updates[-2]['SAFETY_REVIEWER']
-        self.assertEqual(safety['safety_status'].decision, 'approve')
+        self.assertEqual(safety['safety_status'].outcome, 'approve')
         self.assertFalse(safety['needs_replan'])
         self.assertIsNotNone(safety['current_plan'])
 
@@ -75,13 +80,13 @@ class MissionGraphTest(unittest.TestCase):
             if destination == AgentType.MISSION_PLANNER:
                 destinations.append(AgentType.SAFETY_REVIEWER)
                 expected.extend([AgentType.MISSION_COMMANDER, AgentType.SAFETY_REVIEWER])
-            self.assertEqual(self.run_path(destinations, ['revise', 'approve']),
+            self.assertEqual(self.run_path(destinations, ['replan', 'approve']),
                              expected + [AgentType.FLEET_MONITOR])
 
     def test_commander_can_escalate_revision_and_human_rejection_returns_to_commander(self):
         self.assertEqual(
             self.run_path([AgentType.SAFETY_REVIEWER, HUMAN_REVIEW_NODE,
-                           HUMAN_REVIEW_NODE], ['revise'], [False, True]),
+                           HUMAN_REVIEW_NODE], ['replan'], [False, True]),
             [AgentType.MISSION_COMMANDER, AgentType.SAFETY_REVIEWER,
              AgentType.MISSION_COMMANDER, HUMAN_REVIEW_NODE,
              AgentType.MISSION_COMMANDER, HUMAN_REVIEW_NODE, AgentType.FLEET_MONITOR],
@@ -91,11 +96,11 @@ class MissionGraphTest(unittest.TestCase):
         initial = self.state()
         candidate = Plan(plan={}, reason='Candidate', estimated_completion_times=0)
         initial.under_review = candidate
-        initial.safety_status = Evaluation(decision='revise', reason='Safety concern')
+        initial.safety_status = ReviewResult(outcome='replan', critique='Safety concern', concerns=[], mandatory_watches=[])
         policy = Mock()
         policy.evaluate.return_value = CommanderRoutingDecision(
             next_agent=HUMAN_REVIEW_NODE,
-            commander_rethink=Evaluation(decision='arbitrate', reason='Need human judgement'),
+            commander_rethink=CommanderReviewOutcome.HUMAN_REQUIRED,
         )
         workflow = build_mission_graph({
             AgentType.MISSION_COMMANDER: MissionCommander(policy=policy).run,
@@ -105,7 +110,7 @@ class MissionGraphTest(unittest.TestCase):
             final = MissionState.model_validate(workflow.invoke(initial))
         self.assertEqual(prompt.call_count, 2)
         self.assertIn('Safety concern', prompt.call_args_list[0].args[0])
-        self.assertIn('Need human judgement', prompt.call_args_list[0].args[0])
+        self.assertIn('HUMAN_REQUIRED', prompt.call_args_list[0].args[0])
         self.assertTrue(final.human_approval)
         self.assertFalse(final.needs_replan)
         self.assertEqual(final.current_plan.plan, candidate.plan)
@@ -115,23 +120,26 @@ class MissionGraphTest(unittest.TestCase):
         initial = self.state()
         policy = Mock()
         policy.evaluate.side_effect = [
-            Evaluation(decision='revise', reason='Change priorities'),
-            Evaluation(decision='approve', reason='Revised plan accepted'),
+            ReviewResult(outcome='replan', critique='Change priorities', concerns=[], mandatory_watches=[]),
+            ReviewResult(outcome='approve', critique='Revised plan accepted', concerns=[], mandatory_watches=[]),
         ]
         planner_states = []
         def planner(state):
             planner_states.append(state)
-            return {'proposed_plans': [Plan(plan={}, reason='New proposal', estimated_completion_times=0)]}
+            return [Plan(plan={}, reason='New proposal', estimated_completion_times=0)]
+        planner_policy = Mock()
+        planner_policy.evaluate.side_effect = planner
         workflow = build_mission_graph({
             AgentType.SAFETY_REVIEWER: SafetyReviewer(policy=policy).run,
-            AgentType.MISSION_PLANNER: planner,
+            AgentType.MISSION_PLANNER: MissionPlanner(policy=planner_policy).run,
             AgentType.FLEET_MONITOR: lambda state: {},
         }).compile()
         final = MissionState.model_validate(workflow.invoke(initial))
         self.assertEqual(len(planner_states), 2)
-        self.assertEqual(planner_states[1].commander_rethink.reason, 'Change priorities')
+        self.assertEqual(planner_states[1].commander_rethink, CommanderReviewOutcome.REPLAN)
+        self.assertEqual(planner_states[1].safety_status.critique, 'Change priorities')
         self.assertEqual(planner_states[1].proposed_plans, [])
-        self.assertEqual(final.safety_status.decision, 'approve')
+        self.assertEqual(final.safety_status.outcome, 'approve')
         self.assertFalse(final.needs_replan)
 
     def test_routes_and_state_round_trip_support_human_destination(self):
@@ -141,8 +149,9 @@ class MissionGraphTest(unittest.TestCase):
         self.assertEqual(route_commander(restored), HUMAN_REVIEW_NODE)
         self.assertIsNone(restored.commander_rethink)
         for outcome, destination in (('approve', AgentType.FLEET_MONITOR),
-                                     ('revise', AgentType.MISSION_COMMANDER)):
-            state.safety_status = Evaluation(decision=outcome, reason='Review')
+                                     ('replan', AgentType.MISSION_COMMANDER),
+                                     ('reconsider_priority', AgentType.MISSION_COMMANDER)):
+            state.safety_status = ReviewResult(outcome=outcome, critique='Review', concerns=[], mandatory_watches=[])
             self.assertEqual(route_safety_review(state), destination)
         for approval, destination in ((True, AgentType.FLEET_MONITOR),
                                       (False, AgentType.MISSION_COMMANDER)):
@@ -157,9 +166,9 @@ class MissionGraphTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 router(self.state())
         state = self.state()
-        state.safety_status = Evaluation(decision='human_reviewer', reason='Unsupported safety outcome')
         with self.assertRaises(ValueError):
-            route_safety_review(state)
+            ReviewResult(outcome='human_reviewer', critique='Unsupported safety outcome',
+                         concerns=[], mandatory_watches=[])
 
 
 if __name__ == '__main__':

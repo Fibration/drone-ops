@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 from src.drone import DroneController
 from src.map import Terrain
-from src.models import DroneState, IncidentType, Objective, ObjectiveType
+from src.models import DroneState, IncidentType, Objective, ObjectiveType, MonitoringPlan, WatchPredicate, WatchType, FreeWatchType
 from src.scenario import Difficulty, Scenario, Sector, Weather, World, generate_world
 from src.simulator import Simulator
 
@@ -99,7 +99,7 @@ class WorldSimulationTest(unittest.TestCase):
                     sim.step({'0': order(ObjectiveType.RETURN_TO_BASE)})
                 self.assertEqual(w.drones['0'].comms, expected)
                 self.assertEqual(w.drones['0'].position, (0, 3))
-                self.assertEqual(sim.telemetry_history[-1].drones['0'].comms, expected)
+                self.assertEqual(sim._watch_history[-1].comms['0'], expected)
 
         w = world(weather=Weather.BLIZZARD)
         sim = self.simulator(w)
@@ -144,7 +144,7 @@ class WorldSimulationTest(unittest.TestCase):
         self.assertEqual([d.battery for d in w.drones.values()], [5.0, 100.0, 20])
         sim.step({})
         self.assertEqual([d.battery for d in w.drones.values()], [10.0, 100.0, 20])
-        self.assertEqual(sim.telemetry_history[-1].drones['0'].battery, 10.0)
+        self.assertEqual(sim._watch_history[-1].battery['0'], 10.0)
 
     def test_arriving_at_base_recharges_but_departing_does_not(self):
         w = world(drones={'0': drone(position=(0, 1))})
@@ -240,10 +240,10 @@ class WorldSimulationTest(unittest.TestCase):
         self.assertFalse(sim.discovered_targets)
         self.assertEqual(w.drones['0'].battery, 0)
         self.assertIn((0, 3), sim.explored_cells)
-        self.assertTrue(any('rescued' in event for event in events))
-        self.assertTrue(any('ran out of battery' in event for event in events))
+        self.assertFalse(any(event.type is FreeWatchType.MISSION_COMPLETE for event in events))
+        self.assertTrue(any(event.type is FreeWatchType.DRONE_HARD_FAILURE for event in events))
         decay.assert_called_once()
-        self.assertFalse(any('ran out of battery' in event for event in sim.step()))
+        self.assertFalse(any(event.type is FreeWatchType.DRONE_HARD_FAILURE for event in sim.step()))
 
     def test_expiration_removes_discovered_target_and_updates_world(self):
         w = world()
@@ -257,9 +257,8 @@ class WorldSimulationTest(unittest.TestCase):
         with self.assertRaises(KeyError):
             w.update_target_success('target_0', 2)
         self.assertFalse(sim.discovered_targets)
-        self.assertTrue(any('expired' in event for event in events))
-        self.assertFalse(any('detected' in event or 'expired' in event
-                             for event in sim.step({})))
+        self.assertFalse(any(event.type is FreeWatchType.MISSION_COMPLETE for event in events))
+        self.assertFalse(sim.step({}))
 
     def test_incident_changes_world_before_route_execution(self):
         w = world(drones={'0': drone(position=(0, 3))})
@@ -283,8 +282,7 @@ class WorldSimulationTest(unittest.TestCase):
         sim.step({'0': order(ObjectiveType.HOLD)})
         self.assertEqual(w.drones['0'].position, (0, 2))
         self.assertEqual(sim.explored_cells, before)
-        self.assertEqual(sim.telemetry_queries.position('0')['0'][0].step, 1)
-        self.assertEqual(sim.telemetry_history[0].drones['0'].position, (0, 4))
+        self.assertEqual(sim._watch_history[0].battery['0'], 20)
 
     def test_disconnected_route_cannot_enter_new_restriction(self):
         w = world(drones={'0': drone(position=(0, 4))})
@@ -294,7 +292,7 @@ class WorldSimulationTest(unittest.TestCase):
         w.no_fly.add((0, 2))
         events = sim.step()
         self.assertEqual(w.drones['0'].position, (0, 3))
-        self.assertTrue(any('route blocked' in event for event in events))
+        self.assertFalse(events)
 
     def test_shared_base_allows_returns_but_other_cells_prevent_collisions(self):
         w = world(drones={'0': drone(position=(0, 1)), '1': drone('1', (1, 0))})
@@ -312,9 +310,15 @@ class WorldSimulationTest(unittest.TestCase):
         add_target(w, (0, 2))
         w.obstacles.update({(0, 1), (1, 2), (0, 3)})
         sim = self.simulator(w)
+        sim.set_monitoring_plan(MonitoringPlan(
+            watches=[WatchPredicate(type=WatchType.ROUTE_UNREACHABLE, drone_id='0'),
+                     WatchPredicate(type=WatchType.CHARGE_ABOVE, drone_id='0', threshold=100),
+                     WatchPredicate(type=WatchType.WEATHER_AT_LEAST, sector_id='0', threshold='blizzard')],
+            reason='Watch the accepted route',
+        ))
         events, explored, timestep = sim.execute_plan(
             {'0': order(ObjectiveType.GOTO, target_id='target_0')})
-        self.assertTrue(any('cannot reach target' in event for event in events))
+        self.assertTrue(any(event.type is WatchType.ROUTE_UNREACHABLE for event in events))
         self.assertEqual(timestep, 1)
         self.assertEqual(w.drones['0'].position, (0, 0))
         explored.clear()
@@ -326,8 +330,8 @@ class WorldSimulationTest(unittest.TestCase):
         with patch.object(w, 'update_active_targets', wraps=w.update_active_targets) as decay:
             events = sim.step({})
             later = sim.step({})
-        self.assertIn('Sector 0 fully explored', events)
-        self.assertNotIn('Sector 0 fully explored', later)
+        self.assertIn('0', sim.completed_sectors)
+        self.assertFalse(later)
         self.assertEqual(decay.call_count, 2)
         self.assertEqual(w.drones['0'].battery, 20)
 

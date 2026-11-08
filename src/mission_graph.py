@@ -4,8 +4,14 @@ from typing import Any, Literal, Protocol
 from langgraph.graph import START, END, StateGraph
 
 from src.agent import FleetMonitor, MissionCommander, MissionPlanner, SafetyReviewer
-from src.telemetry import TelemetryQueries
-from src.models import AgentType, MissionPlan, MissionState, MissionStatus
+from src.policy import FleetMonitorPolicy
+from src.models import (
+    AgentType,
+    MissionPlan,
+    MissionState,
+    MissionStatus,
+    ReviewOutcome,
+)
 
 HUMAN_REVIEW_NODE: Literal["human_reviewer"] = "human_reviewer"
 NodeName = AgentType | Literal["human_reviewer"]
@@ -43,6 +49,7 @@ def human_reviewer(state: MissionState) -> StateUpdate:
         return {
             "human_approval": True,
             "current_plan": MissionPlan(plan=state.under_review.plan),
+            "monitoring_plan": None,
             "needs_replan": False,
         }
     elif human_decision == "n":
@@ -58,7 +65,6 @@ def route_commander(state: MissionState) -> str:
         return AgentType.FLEET_MONITOR
     destination = state.next_agent
     if destination is None or destination not in {
-        AgentType.FLEET_MONITOR,
         AgentType.MISSION_PLANNER,
         AgentType.SAFETY_REVIEWER,
         HUMAN_REVIEW_NODE,
@@ -69,13 +75,14 @@ def route_commander(state: MissionState) -> str:
 
 def route_safety_review(state: MissionState) -> str:
     routes: dict[str, str] = {
-        "approve": AgentType.FLEET_MONITOR,
-        "revise": AgentType.MISSION_COMMANDER,
+        ReviewOutcome.APPROVE: AgentType.FLEET_MONITOR,
+        ReviewOutcome.REPLAN: AgentType.MISSION_COMMANDER,
+        ReviewOutcome.RECONSIDER_PRIORITY: AgentType.MISSION_COMMANDER,
     }
     outcome = state.safety_status
-    if outcome is None or outcome.decision not in routes:
+    if outcome is None or outcome.outcome not in routes:
         raise ValueError(f"Invalid safety review outcome: {outcome!r}")
-    return routes[outcome.decision]
+    return routes[outcome.outcome]
 
 
 def route_human_review(state: MissionState) -> str:
@@ -89,11 +96,11 @@ def route_human_review(state: MissionState) -> str:
 def build_mission_graph(
     nodes: Mapping[NodeName, NodeHandler] | None = None,
     *,
-    telemetry_queries: TelemetryQueries | None = None,
+    fleet_monitor_policy: FleetMonitorPolicy | None = None,
 ) -> StateGraph[MissionState]:
     """Build the README workflow, optionally supplying concrete node handlers."""
     handlers: dict[NodeName, NodeHandler] = {
-        AgentType.FLEET_MONITOR: FleetMonitor(telemetry_queries=telemetry_queries).run,
+        AgentType.FLEET_MONITOR: FleetMonitor(policy=fleet_monitor_policy).run,
         AgentType.MISSION_COMMANDER: mission_commander,
         AgentType.MISSION_PLANNER: mission_planner,
         AgentType.SAFETY_REVIEWER: safety_reviewer,

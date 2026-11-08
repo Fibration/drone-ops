@@ -12,7 +12,7 @@ class DroneInitialState(TypedDict):
 def initialize_drone_states(
     drones: list[tuple[int, int]], default_battery: float
 ) -> dict[str, DroneState]:
-    """Create simulation states keyed by drone ID from initial telemetry."""
+    """Create simulation states keyed by drone ID from initial positions."""
     return {
         str(i): DroneState(
             id=str(i),

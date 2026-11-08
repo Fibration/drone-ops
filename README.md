@@ -24,7 +24,8 @@ events = simulator.step({
 
 `step()` advances one turn and retains accepted orders when no plan is supplied.
 An empty plan holds all connected drones. `execute_plan(plan, max_steps=80)` runs
-until an event or the turn limit and returns `(events, explored_cells, timestep)`.
+until a selected or free watch triggers, or the turn limit, and returns
+`(alerts, explored_cells, timestep)`.
 The simulator exposes `discovered_targets` as target IDs mapped to positions;
 use those IDs with `GOTO` orders. Reaching a target records a rescue in
 `simulator.world`; remaining targets can expire each turn. Sensing uses sector
@@ -40,45 +41,21 @@ Drones ending a turn at base gain `scenario.recharge_rate` battery units,
 up to 100.0, including drones that have exhausted their battery.
 Each powered drone outside base has a 1% chance per turn of a communications
 failure in stormy weather, or 2% in blizzards, including while holding position.
-Failures are reported by periodic monitoring.
+Communications failures can be watched with `COMMS_LOST_FOR`.
 
 The older mission orchestration below still uses the previous simulator API and
 needs migration before it can run with this simulator.
 
-The fleet-monitor policy receives telemetry query functions rather than raw drone
-state. Available functions are `battery_level`, `position`, `comms`, `status`, and
-`assignment`; `available_telemetry()` describes them and `drone_ids()` lists drones.
+The fleet monitor chooses a `MonitoringPlan` containing exactly three
+`WatchPredicate` instances and a nonempty `reason`. Its policy receives a detached
+copy of the accepted mission plan, the safety review, and the current turn.
+`FleetMonitor.run()` stores the result in `MissionState.monitoring_plan`.
+Agents will access additional information through a separate tool suite.
 
-```python
-queries.battery_level("0")                         # Latest reading for one drone
-queries.position(["0", "1"], at_step=5)             # Last reading at or before step 5
-queries.comms(history=True)                        # History for every drone
-queries.battery_level(["0"], history=True, at_step=5)
-```
-
-Results are keyed by drone ID, with timestamped readings in step order. Latest
-queries return at most one reading per ID; no reading is represented by an empty
-list. Position, battery, status, and assignment reports stop updating while a
-drone is disconnected, so the returned timestamp can be older than the mission.
-
-The commander sees the catalog in `MissionState.available_telemetry` and can
-request more data by returning a `CommanderRoutingDecision`:
-
-```python
-CommanderRoutingDecision(
-    next_agent=AgentType.FLEET_MONITOR,
-    telemetry_requests=[TelemetryRequest(
-        field=TelemetryField.BATTERY_LEVEL,
-        drone_ids=["0"],
-        history=True,
-    )],
-)
-```
-
-The monitor fulfills these requests and clears `telemetry_requests`. Results
-accumulate in `MissionState.telemetry`, preserving existing observations and
-proposals while the commander considers the additional data. Historical readings
-come from simulator snapshots recorded at initialization and each simulated step.
+The selection heuristic is intentionally deferred. Inject a `FleetMonitorPolicy`
+through `build_mission_graph(fleet_monitor_policy=policy, ...)`; its `evaluate()`
+method must return a valid `MonitoringPlan`. The default placeholder raises
+`NotImplementedError` rather than inventing watches.
 
 ```mermaid
 ---
@@ -115,21 +92,90 @@ Each planning cycle starts at the commander. Safety revisions return to the
 commander, who can request replanning, resubmit a proposal, or send it to
 `human_reviewer` for arbitration. Safety and human approvals pass through the
 fleet monitor before the cycle ends; human rejection returns to the commander.
-Safety outcomes are `Evaluation` objects with `decision` and `reason`.
+Safety outcomes are `ReviewResult` objects with an `outcome`, `critique`,
+`concerns`, and `mandatory_watches`. Outcomes are `approve`, `replan`, or
+`reconsider_priority`; the latter two return to the commander.
 
-The simulator owns drone state, controllers, and telemetry history. Mission state
-contains known `drone_ids` and received telemetry, while events contain a description
-and simulation step. Build each mission graph with the simulator's live query provider:
+The simulator owns drone state, controllers, and private watch history.
+Mission state contains known drone IDs and typed `WatchAlert` records in `events`
+and `latest_events`. Build each mission graph with an injected monitor policy:
 
 ```python
-workflow = build_mission_graph(telemetry_queries=simulator.telemetry_queries).compile()
+workflow = build_mission_graph(
+    fleet_monitor_policy=monitoring_policy,
+).compile()
 
 def control_cycle(state):
     return MissionState.model_validate(workflow.invoke(state))
 
-result = mission(simulator, terrain, control_cycle, monitoring_checks)
+result = control_cycle(mission_state)
+assert result.current_plan is not None and result.monitoring_plan is not None
+simulator.set_monitoring_plan(result.monitoring_plan)
+alerts, explored_cells, step = simulator.execute_plan(result.current_plan.plan)
 ```
 
-Query results are detached readings: simulator updates become visible through new
-queries, while previously received mission telemetry retains its reported values
-and timestamps. Raw snapshots stay in the simulator.
+Watch predicates are dispatched by `src.watch.check_watch(predicate, context)`.
+`WatchContext` supplies the world, turn, internal battery/comms history, sector completion,
+route costs, explored cells, and known/acquired target IDs. Checks are read-only.
+For example:
+
+```python
+from src.models import MonitoringPlan, WatchPredicate, WatchType
+
+simulator.set_monitoring_plan(MonitoringPlan(watches=[
+    WatchPredicate(type=WatchType.CHARGE_ABOVE, drone_id="0", threshold=90),
+    WatchPredicate(type=WatchType.COMMS_LOST_FOR, drone_id="1", horizon=3),
+    WatchPredicate(type=WatchType.ROUTE_UNREACHABLE, drone_id="2"),
+], reason="Watch charging, communication, and the accepted route."))
+simulator.on_alert = lambda alerts: control_cycle_for_alerts(alerts)
+```
+
+The callback runs once for each batch of newly true watches. A condition must
+clear before it can alert again, or the agent can arm a fresh set with
+`set_monitoring_plan()`. Only the three chosen optional predicates are evaluated.
+The three `FreeWatchType` hooks always run across their relevant entities:
+
+- `NEW_TARGET_DETECTED`: each newly observed target, with the detecting drone.
+- `DRONE_HARD_FAILURE`: each drone with no battery away from base.
+- `MISSION_COMPLETE`: every reachable traversable cell has been observed and
+  every known target has a confirmed acquisition. Obstacle cells, no-fly cells,
+  and cells disconnected from the base and initial drone positions are excluded
+  from coverage. Temporary drone occupancy and battery limits do not make cells
+  unreachable. Reachability is refreshed when terrain restrictions change.
+
+Completion uses persistent observed target IDs and reported acquisitions, not
+the simulator's hidden target count or failure list. An expired known target
+does not count as acquired. A completion alert reports `SUCCESS`.
+
+Free watches run even without a monitoring plan and do not consume its three
+slots. Installing a new monitoring plan does not repeat an existing free alert.
+`step()` and `execute_plan()` return only `WatchAlert` records. Incidents, rescues,
+expiry, sector completion, route failures, and plan exhaustion update simulation
+state but do not independently invoke the agent loop. At the turn limit,
+`execute_plan()` returns an empty alert list without calling the callback.
+The callback is the integration point for the agent loop.
+
+`CHARGE_ABOVE` only matches drones at base. `COMMS_LOST_FOR` measures consecutive
+elapsed disconnected turns. `BATTERY_DRAIN_ABOVE` compares battery loss over
+`horizon` turns (default one). `RETURN_RESERVE_BELOW` subtracts the estimated
+battery cost of a shortest traversable return route. `ROUTE_COST_INCREASED_BY`
+compares current remaining-route cost against the accepted route when armed.
+`TARGET_NOT_REACHED_BY` treats `horizon` as an absolute turn deadline.
+
+Weather forecast risk is the probability of reaching stormy or blizzard weather
+within the horizon. It uses a cheap, deterministic scenario-only forecast that
+intentionally ignores neighbouring weather. It does not change the world or
+consume simulation randomness.
+
+`TARGET_SURVIVAL_PROBABILITY_BELOW` requires `decay_rate_prior` as well as the
+probability `threshold` and turn `horizon`. It forecasts survival for the specified
+target ID using the supplied removal prior, independently of other target
+counts and the sector's true decay rate. Per-turn survival is `1 - exp(-prior)`;
+a zero prior disables removal, matching the simulator. For example:
+
+```python
+WatchPredicate(
+    type=WatchType.TARGET_SURVIVAL_PROBABILITY_BELOW,
+    target_id="target_0", threshold=0.5, horizon=10, decay_rate_prior=2.0,
+)
+```

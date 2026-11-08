@@ -3,7 +3,6 @@ from typing import Protocol
 import json
 from src.map import Terrain
 from src.mission_updates import (
-    update_no_fly_zones,
     update_discovered_targets,
     update_completed_sectors,
     evaluate_mission_status,
@@ -136,7 +135,6 @@ def mission_team(
     mission_state: MissionState, map: list[list[Terrain]], sectors: dict[str, Sector],
     *, policy: CommanderPolicy | None = None,
 ) -> MissionState:
-    update_no_fly_zones(mission_state)
     update_completed_sectors(mission_state)
     target_count = len(mission_state.discovered_targets)
     detected = update_discovered_targets(mission_state)

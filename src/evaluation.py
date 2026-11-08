@@ -9,16 +9,18 @@ def evaluate(simulator: Simulator, starting_battery: float):
 
     fraction_targets_acquired = (
         len(simulator.world.successful_targets) / simulator.scenario.num_targets
+        if simulator.scenario.num_targets else 1.0
     )
 
-    reciprocal_time_elapsed = 1 / simulator.timestep
+    reciprocal_time_elapsed = 1 / max(1, simulator.timestep)
 
     fraction_fleet_survived = len(
         [x for x in simulator.drones.values() if x.battery > 0 and x.comms]
-    ) / len(simulator.drones.keys())
+    ) / len(simulator.drones) if simulator.drones else 1.0
 
     fraction_energy_remaining = (
-        sum([x.battery for x in simulator.drones.values()]) / starting_battery
+        sum(x.battery for x in simulator.drones.values()) / starting_battery
+        if starting_battery > 0 else 0.0
     )
 
     return (
