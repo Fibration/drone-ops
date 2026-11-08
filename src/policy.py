@@ -1,16 +1,17 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal, Protocol, TypeVar
 
 from src.models import (
-    AgentType, MissionState, MissionStatus, Objective, ObjectiveType, Plan, Region, Target,
+    AgentType, MissionState, MissionStatus, Objective, ObjectiveType, Plan,
+    TelemetryField, TelemetryRequest, TelemetryResult,
 )
 from src.mission_updates import (
-    evaluate_mission_status, parse_target_detection, update_completed_sectors,
-    update_discovered_targets, update_no_fly_zones,
+    evaluate_mission_status, parse_target_detection,
 )
 
+from src.telemetry import TelemetryQueries
+
 Result = TypeVar("Result", covariant=True)
-Telemetry = dict[str, str | int | float]
 SafetyOutcome = Literal["approve", "revise", "human_reviewer"]
 
 
@@ -23,43 +24,36 @@ class CommanderRoutingDecision:
     next_agent: AgentType | None
     under_review: Plan | None = None
     mission_status: MissionStatus = MissionStatus.ONGOING
+    needs_replan: bool = True
+    telemetry_requests: list[TelemetryRequest] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
-class FleetMonitorResult:
-    telemetry: Telemetry
-    no_fly_zones: list[Region]
-    discovered_targets: dict[str, Target]
-    completed_sectors: set[str]
-    needs_replan: bool
+class FleetMonitorObservation:
+    telemetry: TelemetryQueries
+    requests: tuple[TelemetryRequest, ...]
+    step: int
+
+
+class FleetMonitorPolicy(Protocol):
+    def evaluate(self, observation: FleetMonitorObservation) -> list[TelemetryResult]: ...
 
 
 class NaiveFleetMonitorPolicy:
-    def evaluate(self, state: MissionState) -> FleetMonitorResult:
-        observed = state.model_copy(update={
-            "no_fly_zones": list(state.no_fly_zones),
-            "discovered_targets": dict(state.discovered_targets),
-            "completed_sectors": set(state.completed_sectors),
-        })
-        target_count = len(observed.discovered_targets)
-        update_no_fly_zones(observed)
-        update_completed_sectors(observed)
-        detections = update_discovered_targets(observed)
-        redundant = (
-            bool(state.latest_events)
-            and len(detections) == len(state.latest_events)
-            and len(observed.discovered_targets) == target_count
-            and state.current_plan is not None
-        )
-        telemetry: Telemetry = {"step": state.step}
-        for drone_id, drone in state.drones.items():
-            telemetry[f"{drone_id}.battery"] = drone.battery
-            telemetry[f"{drone_id}.comms"] = drone.comms
-        return FleetMonitorResult(
-            telemetry=telemetry, no_fly_zones=observed.no_fly_zones,
-            discovered_targets=observed.discovered_targets,
-            completed_sectors=observed.completed_sectors, needs_replan=not redundant,
-        )
+    def evaluate(self, observation: FleetMonitorObservation) -> list[TelemetryResult]:
+        requests = observation.requests or tuple(TelemetryRequest(field=field) for field in (
+            TelemetryField.BATTERY_LEVEL, TelemetryField.POSITION, TelemetryField.COMMS,
+        ))
+        readers = {
+            TelemetryField.BATTERY_LEVEL: observation.telemetry.battery_level,
+            TelemetryField.POSITION: observation.telemetry.position,
+            TelemetryField.COMMS: observation.telemetry.comms,
+            TelemetryField.STATUS: observation.telemetry.status,
+            TelemetryField.ASSIGNMENT: observation.telemetry.assignment,
+        }
+        return [TelemetryResult(request=request, readings=readers[request.field](
+            request.drone_ids, at_step=request.at_step, history=request.history,
+        )) for request in requests]
 
 
 class NaiveMissionCommanderPolicy:
@@ -67,8 +61,19 @@ class NaiveMissionCommanderPolicy:
         status = evaluate_mission_status(state)
         if status != MissionStatus.ONGOING:
             return CommanderRoutingDecision(next_agent=None, mission_status=status)
-        if not state.needs_replan and state.current_plan is not None:
-            return CommanderRoutingDecision(next_agent=None)
+        if state.telemetry_requests:
+            return CommanderRoutingDecision(
+                next_agent=AgentType.FLEET_MONITOR,
+                telemetry_requests=list(state.telemetry_requests),
+            )
+        redundant = (
+            bool(state.latest_events) and not state.new_target_ids
+            and all(parse_target_detection(event.description) is not None
+                    for event in state.latest_events)
+            and state.current_plan is not None
+        )
+        if redundant:
+            return CommanderRoutingDecision(next_agent=None, needs_replan=False)
         if not state.proposed_plans:
             return CommanderRoutingDecision(next_agent=AgentType.MISSION_PLANNER)
         return CommanderRoutingDecision(
@@ -84,7 +89,7 @@ class NaiveMissionPlannerPolicy:
             if drone_id in current else Objective(
                 drone_id=drone_id, objective_type=ObjectiveType.HOLD
             )
-            for drone_id in state.drones
+            for drone_id in state.drone_ids
         }
         targets = {target.position: target for target in state.discovered_targets.values()}
         for event in state.latest_events:

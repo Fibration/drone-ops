@@ -16,7 +16,7 @@ def evaluate_mission_status(state: MissionState) -> MissionStatus:
     """Evaluate exhaustion against all known target arrivals without mutating state."""
     if not any(event.description == "Mission plan exhausted" for event in state.latest_events):
         return state.mission_status
-    reached = {drone.position for drone in state.drones.values()}
+    reached: set[tuple[int, int]] = set()
     for event in state.events:
         arrival = re.fullmatch(
             r"Drone (.+) reached the target at \((-?\d+),\s*(-?\d+)\)", event.description

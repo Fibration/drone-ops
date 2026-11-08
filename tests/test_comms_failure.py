@@ -20,7 +20,7 @@ class CommsFailureTest(unittest.TestCase):
             "0": accepted,
             "1": Objective(drone_id="1", objective_type=ObjectiveType.HOLD),
         }
-        event, _, explored, step = simulator.execute_plan(
+        event,  explored, step = simulator.execute_plan(
             plan, {"battery_reserve_threshold": 0.0}, {}, targets,
         )
 
@@ -34,7 +34,7 @@ class CommsFailureTest(unittest.TestCase):
 
         # Mission control's replacement cannot be delivered during the outage.
         plan["0"] = Objective(drone_id="0", objective_type=ObjectiveType.RETURN_TO_BASE)
-        event, _, explored, step = simulator.execute_plan(
+        event,  explored, step = simulator.execute_plan(
             plan, {"battery_reserve_threshold": 0.0}, {}, targets, explored,
         )
         self.assertEqual(event, ["Mission plan exhausted"])
@@ -47,7 +47,7 @@ class CommsFailureTest(unittest.TestCase):
         self.assertEqual(drones["1"].battery, 25.0)
 
         # With no remaining accepted steps, it holds even when omitted from a plan.
-        event, _, _, final_step = simulator.execute_plan(
+        event,  _, final_step = simulator.execute_plan(
             {"1": plan["1"]}, {"battery_reserve_threshold": 0.0}, {}, targets, explored,
         )
         self.assertEqual(event, ["Mission plan exhausted"])

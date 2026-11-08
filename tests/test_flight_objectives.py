@@ -32,7 +32,7 @@ class FlightObjectiveTest(unittest.TestCase):
     def test_empty_battery_drone_never_moves(self):
         drones = initialize_drone_states([(0, 2)], 0.0)
         simulator = Simulator([[Terrain.EMPTY] * 3], drones, [])
-        event, _, _, step = simulator.execute_plan(
+        event,  _, step = simulator.execute_plan(
             {"0": Objective(drone_id="0", objective_type=ObjectiveType.RETURN_TO_BASE)},
             {"battery_reserve_threshold": 0.0},
             {},
@@ -53,13 +53,13 @@ class FlightObjectiveTest(unittest.TestCase):
         plan = {
             "0": Objective(drone_id="0", objective_type=ObjectiveType.RETURN_TO_BASE)
         }
-        first_event, _, _, _ = simulator.execute_plan(
+        first_event,  _, _ = simulator.execute_plan(
             plan, {"battery_reserve_threshold": 0.0}, {}, {}
         )
         self.assertEqual(first_event, ["Drone 0 ran out of battery at (0, 2)"])
         self.assertEqual(drones["0"].position, (0, 2))
         for _ in range(3):
-            event, _, _, step = simulator.execute_plan(
+            event,  _, step = simulator.execute_plan(
                 plan,
                 {"battery_reserve_threshold": 0.0},
                 {},
@@ -80,11 +80,11 @@ class FlightObjectiveTest(unittest.TestCase):
             )
             for drone_id in drones
         }
-        first_event, _, _, _ = simulator.execute_plan(
+        first_event,  _, _ = simulator.execute_plan(
             plan, {"battery_reserve_threshold": 0.0}, {}, {}
         )
         self.assertEqual(first_event, ["Drone 0 ran out of battery at (0, 2)"])
-        next_event, _, _, _ = simulator.execute_plan(
+        next_event,  _, _ = simulator.execute_plan(
             plan, {"battery_reserve_threshold": 0.0}, {}, {}
         )
         self.assertEqual(next_event, ["Drone 1 returned to base at (0, 0)"])
@@ -111,7 +111,7 @@ class FlightObjectiveTest(unittest.TestCase):
         plan = {
             "0": Objective(drone_id="0", objective_type=ObjectiveType.RETURN_TO_BASE)
         }
-        event, _, _, step = simulator.execute_plan(
+        event,  _, step = simulator.execute_plan(
             plan,
             {"battery_reserve_threshold": 0.0},
             {},
@@ -128,7 +128,7 @@ class FlightObjectiveTest(unittest.TestCase):
         plan["0"] = Objective(
             drone_id="0", objective_type=ObjectiveType.SEARCH_SECTOR, sector_id="0"
         )
-        event, _, _, final_step = simulator.execute_plan(
+        event,  _, final_step = simulator.execute_plan(
             plan,
             {"battery_reserve_threshold": 0.0},
             sectors,
@@ -144,7 +144,7 @@ class FlightObjectiveTest(unittest.TestCase):
         plan = {
             "0": Objective(drone_id="0", objective_type=ObjectiveType.RETURN_TO_BASE)
         }
-        event, _, _, _ = simulator.execute_plan(
+        event,  _, _ = simulator.execute_plan(
             plan,
             {"battery_reserve_threshold": 0.0},
             {},
@@ -154,7 +154,7 @@ class FlightObjectiveTest(unittest.TestCase):
         controller = simulator.controllers["0"]
         self.assertEqual(controller.route[controller.route_index :], [(0, -1), (0, -1)])
         drones["0"].comms = False
-        event, _, _, _ = simulator.execute_plan(
+        event,  _, _ = simulator.execute_plan(
             {},
             {"battery_reserve_threshold": 0.0},
             {},
@@ -196,7 +196,7 @@ class FlightObjectiveTest(unittest.TestCase):
             "0": Objective(drone_id="0", objective_type=ObjectiveType.HOLD),
             "1": Objective(drone_id="1", objective_type=ObjectiveType.RETURN_TO_BASE),
         }
-        event, _, explored, timestep = simulator.execute_plan(
+        event,  explored, timestep = simulator.execute_plan(
             plan, {"battery_reserve_threshold": 10.0}, {}, {}
         )
         self.assertEqual(event, ["Drone 1 returned to base at (0, 0)"])
@@ -204,7 +204,7 @@ class FlightObjectiveTest(unittest.TestCase):
         self.assertEqual(drones["0"].battery, 25.0)
         self.assertEqual(drones["1"].position, (0, 0))
         self.assertEqual(drones["1"].battery, 23.0)
-        event, _, _, final_step = simulator.execute_plan(
+        event,  _, final_step = simulator.execute_plan(
             plan, {"battery_reserve_threshold": 10.0}, {}, {}, explored
         )
         self.assertEqual(event, ["Mission plan exhausted"])
@@ -215,7 +215,7 @@ class FlightObjectiveTest(unittest.TestCase):
             with self.subTest(blocked=blocked):
                 drones = initialize_drone_states([(0, 1)], 25.0)
                 simulator = Simulator([[blocked, Terrain.EMPTY]], drones, [])
-                event, _, _, step = simulator.execute_plan(
+                event,  _, step = simulator.execute_plan(
                     {
                         "0": Objective(
                             drone_id="0", objective_type=ObjectiveType.RETURN_TO_BASE
@@ -240,7 +240,7 @@ class FlightObjectiveTest(unittest.TestCase):
             self.assertLess(len(state.events), 20, "Mission did not terminate")
             events = [event.description for event in state.latest_events]
             if "New no-fly zone added: rows 3-4, columns 1-3" in events:
-                held_position = state.drones["1"].position
+                held_position = simulator.drones["1"].position
                 state.current_plan.plan = {
                     "0": Objective(
                         drone_id="0", objective_type=ObjectiveType.RETURN_TO_BASE
@@ -252,13 +252,13 @@ class FlightObjectiveTest(unittest.TestCase):
             return state
 
         result = mission(
-            simulator, terrain, drones, commander, {"battery_reserve_threshold": 10.0}
+            simulator, terrain,  commander, {"battery_reserve_threshold": 10.0}
         )
         self.assertEqual(result.mission_status, MissionStatus.SUCCESS)
-        self.assertEqual(result.drones["0"].position, (0, 0))
-        self.assertEqual(result.drones["0"].assignment, "return to base at (0, 0)")
-        self.assertEqual(result.drones["1"].position, held_position)
-        self.assertEqual(result.drones["1"].assignment, "hold position")
+        self.assertEqual(simulator.drones["0"].position, (0, 0))
+        self.assertEqual(simulator.drones["0"].assignment, "return to base at (0, 0)")
+        self.assertEqual(simulator.drones["1"].position, held_position)
+        self.assertEqual(simulator.drones["1"].assignment, "hold position")
         self.assertTrue(
             any("returned to base" in event.description for event in result.events)
         )

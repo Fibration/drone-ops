@@ -3,7 +3,7 @@ import unittest
 from src.map import Terrain, extract_from_raw
 from src.mission import RAW_MAP, create_sectors, mission
 from src.mission_commander import NaiveCommanderPolicy, mission_team
-from src.mission_graph import graph
+from src.mission_graph import build_mission_graph
 from src.models import IncidentType, MissionState, MissionStatus
 from src.simulator import Simulator
 from src.utility import initialize_drone_states
@@ -18,11 +18,13 @@ class MissionIntegrationTest(unittest.TestCase):
                 "New no-fly zone added: rows 3-4, columns 4-8"),
         })
 
+        graph = build_mission_graph(telemetry_queries=simulator.telemetry_queries).compile()
+
         def control_cycle(state):
             self.assertLess(len(state.events), 100, "Mission did not terminate")
             return MissionState.model_validate(graph.invoke(state, config={"recursion_limit": 10}))
 
-        result = mission(simulator, terrain, drones, control_cycle,
+        result = mission(simulator, terrain,  control_cycle,
                          {"battery_reserve_threshold": 10.0})
         self.assertEqual(result.mission_status, MissionStatus.SUCCESS)
         self.assertEqual(result.completed_sectors, {"0", "1"})
@@ -50,7 +52,7 @@ class MissionIntegrationTest(unittest.TestCase):
         result = mission(
             simulator,
             terrain,
-            drones,
+            
             mission_team=commander,
             monitoring_checks={"battery_reserve_threshold": 10.0},
         )
@@ -95,7 +97,7 @@ class MissionIntegrationTest(unittest.TestCase):
             if zone_added:
                 self.assertFalse(any("entered a no-fly zone" in event for event in latest))
                 if zone_event not in latest:
-                    for drone in state.drones.values():
+                    for drone in simulator.drones.values():
                         self.assertNotIn(drone.position, zone)
             result = mission_team(state, terrain, sectors, policy=NaiveCommanderPolicy())
             if zone_added:
@@ -112,7 +114,7 @@ class MissionIntegrationTest(unittest.TestCase):
         result = mission(
             simulator,
             terrain,
-            drones,
+            
             mission_team=commander,
             monitoring_checks={"battery_reserve_threshold": 10.0},
         )

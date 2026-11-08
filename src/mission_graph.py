@@ -4,6 +4,7 @@ from typing import Any, Literal, Protocol
 from langgraph.graph import START, END, StateGraph
 
 from src.agent import FleetMonitor, MissionCommander, MissionPlanner, SafetyReviewer
+from src.telemetry import TelemetryQueries
 from src.models import AgentType, MissionPlan, MissionState, MissionStatus
 
 
@@ -83,10 +84,11 @@ def route_human_review(state: MissionState) -> str:
 
 def build_mission_graph(
     nodes: Mapping[NodeName, NodeHandler] | None = None,
+    *, telemetry_queries: TelemetryQueries | None = None,
 ) -> StateGraph[MissionState]:
     """Build the README workflow, optionally supplying concrete node handlers."""
     handlers: dict[NodeName, NodeHandler] = {
-        AgentType.FLEET_MONITOR: fleet_monitor,
+        AgentType.FLEET_MONITOR: FleetMonitor(telemetry_queries=telemetry_queries).run,
         AgentType.MISSION_COMMANDER: mission_commander,
         AgentType.MISSION_PLANNER: mission_planner,
         AgentType.SAFETY_REVIEWER: safety_reviewer,

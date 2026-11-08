@@ -1,5 +1,6 @@
+from src.telemetry import RecordedTelemetry
 from src.drone import DroneController
-from src.models import DroneState, Objective, ObjectiveType, Sector, Target, IncidentType
+from src.models import DroneState, Objective, ObjectiveType, Sector, Target, IncidentType, TelemetrySnapshot
 from src.map import Terrain, no_fly_zone_from_event
 from src.parameters import BASE_POSITION, sensor_range, monitoring_interval
 
@@ -27,6 +28,18 @@ class Simulator:
             drone_id: DroneController(drone_id, drone.position, map, {}, {})
             for drone_id, drone in drones.items()
         }
+        self.telemetry_history: list[TelemetrySnapshot] = []
+        self.telemetry_queries = RecordedTelemetry(self.telemetry_history)
+        self._record_telemetry()
+
+    def _record_telemetry(self) -> None:
+        snapshot = TelemetrySnapshot(step=self.timestep, drones={
+            drone_id: drone.model_copy(deep=True) for drone_id, drone in self.drones.items()
+        })
+        if self.telemetry_history and self.telemetry_history[-1].step == self.timestep:
+            self.telemetry_history[-1] = snapshot
+        else:
+            self.telemetry_history.append(snapshot)
 
     def _observe(self, position: tuple[int, int], explored_cells: set[tuple[int, int]]):
         row, col = position
@@ -131,10 +144,11 @@ class Simulator:
         sectors: dict[str, Sector],
         targets: dict[str, Target],
         explored_cells: set[tuple[int, int]] | None = None,
-    ) -> tuple[list[str], dict[str, DroneState], set[tuple[int, int]], int]:
+    ) -> tuple[list[str], set[tuple[int, int]], int]:
         """Advance until a whole step produces events, returning them together."""
         if explored_cells is None:
             explored_cells = set()
+        self._record_telemetry()
         if not self._initial_observations_complete:
             for drone in self.drones.values():
                 if drone.battery > 0:
@@ -157,8 +171,19 @@ class Simulator:
             controller.update_objective(plan.get(drone_id) or Objective(
                 drone_id=drone_id, objective_type=ObjectiveType.HOLD
             ))
+            objective = controller.objective
+            if objective.objective_type == ObjectiveType.HOLD:
+                drone.assignment = "hold position"
+            elif objective.objective_type == ObjectiveType.RETURN_TO_BASE:
+                drone.assignment = "return to base at (0, 0)"
+            elif objective.objective_type == ObjectiveType.SEARCH_SECTOR:
+                drone.assignment = "search for targets"
+            elif objective.objective_type == ObjectiveType.GOTO:
+                target = targets.get(objective.target_id)
+                drone.assignment = f"go to {target.position}" if target else "go to target"
             if controller.failure_event is not None:
                 events.append(controller.failure_event)
+        self._record_telemetry()
 
         while not events:
             actions = {}
@@ -185,6 +210,7 @@ class Simulator:
             events = self._apply_incident()
             if events:
                 # A new flight restriction pauses before executing stale routes.
+                self._record_telemetry()
                 events.extend(self._sector_completion_events(sectors, explored_cells))
                 events.extend(self._monitor_events(monitoring_checks))
                 break
@@ -202,6 +228,7 @@ class Simulator:
                 self._observe(drone.position, explored_cells)
                 moved.append(drone_id)
 
+            self._record_telemetry()
             # Collect every drone's events after all movement and observations.
             for drone_id in moved:
                 events.extend(self._movement_events(drone_id))
@@ -212,4 +239,4 @@ class Simulator:
             events.extend(self._monitor_events(monitoring_checks))
             events.extend(self._sector_completion_events(sectors, explored_cells))
 
-        return events, self.drones, explored_cells, self.timestep
+        return events, explored_cells, self.timestep

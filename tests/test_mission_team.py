@@ -44,7 +44,7 @@ class MissionTeamTest(unittest.TestCase):
             self.assertTrue(state.latest_events)
             self.assertEqual(state.events[-len(state.latest_events):], state.latest_events)
             for event in state.latest_events:
-                self.assertEqual(event.drones, state.drones)
+                self.assertEqual(event.step, state.step)
             latest = [event.description for event in state.latest_events]
             if zone_event in latest:
                 zone_seen = True
@@ -54,7 +54,7 @@ class MissionTeamTest(unittest.TestCase):
             if zone_seen:
                 self.assertFalse(any("entered a no-fly zone" in event for event in latest))
                 if zone_event not in latest:
-                    for drone in state.drones.values():
+                    for drone in simulator.drones.values():
                         self.assertNotIn(drone.position, zone)
             before = calls
             target_count = len(state.discovered_targets)
@@ -87,7 +87,7 @@ class MissionTeamTest(unittest.TestCase):
             result = mission(
                 simulator,
                 terrain,
-                drones,
+                
                 team,
                 {"battery_reserve_threshold": 10.0},
                 sectors=sectors,

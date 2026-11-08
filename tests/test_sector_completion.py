@@ -17,7 +17,7 @@ class SectorCompletionTest(unittest.TestCase):
         explored = set()
         events = []
         for _ in range(4):
-            event, _, explored, step = simulator.execute_plan(
+            event,  explored, step = simulator.execute_plan(
                 {}, {"battery_reserve_threshold": 0.0}, sectors, {}, explored,
             )
             events.append(event)
@@ -36,7 +36,7 @@ class SectorCompletionTest(unittest.TestCase):
             "0": Objective(drone_id="0", objective_type=ObjectiveType.GOTO, target_id="waypoint"),
             "1": Objective(drone_id="1", objective_type=ObjectiveType.HOLD),
         }
-        event, _, explored, step = simulator.execute_plan(
+        event,  explored, step = simulator.execute_plan(
             plan, {"battery_reserve_threshold": 0.0}, sectors, targets,
         )
         self.assertEqual(event, ["Sector observed fully explored"])
@@ -44,7 +44,7 @@ class SectorCompletionTest(unittest.TestCase):
         self.assertIn((0, 4), explored)
         self.assertEqual(drones["1"].position, (1, 0))
         plan["0"] = Objective(drone_id="0", objective_type=ObjectiveType.HOLD)
-        event, _, _, final_step = simulator.execute_plan(
+        event,  _, final_step = simulator.execute_plan(
             plan, {"battery_reserve_threshold": 0.0}, sectors, targets, explored,
         )
         self.assertEqual(event, ["Mission plan exhausted"])
@@ -59,16 +59,16 @@ class SectorCompletionTest(unittest.TestCase):
         targets = {"waypoint": Target(target_id="waypoint", position=(0, 8))}
         plan = {"0": Objective(drone_id="0", objective_type=ObjectiveType.GOTO,
                                target_id="waypoint")}
-        first, _, explored, step = simulator.execute_plan(
+        first,  explored, step = simulator.execute_plan(
             plan, {"battery_reserve_threshold": 0.0}, sectors, targets,
         )
         self.assertEqual(first, [zone_event, "Sector zone fully explored"])
-        second, _, _, second_step = simulator.execute_plan(
+        second,  _, second_step = simulator.execute_plan(
             {}, {"battery_reserve_threshold": 0.0}, sectors, targets, explored,
         )
         self.assertEqual(second, ["Mission plan exhausted"])
         self.assertEqual(second_step, step)
-        third, _, _, _ = simulator.execute_plan(
+        third,  _, _ = simulator.execute_plan(
             {}, {"battery_reserve_threshold": 0.0}, sectors, targets, explored,
         )
         self.assertEqual(third, ["Mission plan exhausted"])
@@ -80,13 +80,13 @@ class SectorCompletionTest(unittest.TestCase):
         sectors = {"search": Sector(sector_id="search", bounds=((0, 4), (0, 4)))}
         accepted = Objective(drone_id="0", objective_type=ObjectiveType.SEARCH_SECTOR,
                              sector_id="search")
-        event, _, explored, step = simulator.execute_plan(
+        event,  explored, step = simulator.execute_plan(
             {"0": accepted}, {"battery_reserve_threshold": 0.0}, sectors, {},
         )
         self.assertEqual(event, ["Sector search fully explored"])
         self.assertEqual(step, 1)
         controller = simulator.controllers["0"]
-        event, _, _, step = simulator.execute_plan(
+        event,  _, step = simulator.execute_plan(
             {"0": Objective(drone_id="0", objective_type=ObjectiveType.HOLD)},
             {"battery_reserve_threshold": 0.0}, sectors, {}, explored,
         )

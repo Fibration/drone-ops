@@ -20,7 +20,7 @@ class BatteryDrainTest(unittest.TestCase):
                     key: Objective(drone_id=key, objective_type=ObjectiveType.RETURN_TO_BASE)
                     for key in drones
                 }
-                event, _, _, step = simulator.execute_plan(
+                event,  _, step = simulator.execute_plan(
                     plan, {"battery_reserve_threshold": 14.0}, {}, {},
                 )
                 self.assertEqual(step, 5)
@@ -38,7 +38,7 @@ class BatteryDrainTest(unittest.TestCase):
                 self.assertEqual(simulator.controllers["1"].objective.objective_type,
                                  ObjectiveType.RETURN_TO_BASE)
                 # Resume the same plan: the incident must not drain the battery again.
-                resumed_event, _, _, _ = simulator.execute_plan(
+                resumed_event,  _, _ = simulator.execute_plan(
                     plan, {"battery_reserve_threshold": 0.0}, {}, {},
                 )
                 self.assertTrue(any("returned to base" in event for event in resumed_event))

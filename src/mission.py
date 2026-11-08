@@ -1,7 +1,6 @@
 from src.simulator import Simulator
 from src.map import Terrain, extract_from_raw
 from src.models import (
-    DroneState,
     MissionPlan,
     MissionState,
     MissionStatus,
@@ -14,7 +13,6 @@ from src.utility import initialize_drone_states
 from math import isqrt
 from typing import Callable
 from src.models import MissionEvent
-from src.parameters import BASE_POSITION
 
 RAW_MAP = [
     "A . . . X X . . .",
@@ -95,34 +93,35 @@ def divide_search(
 def mission(
     simulator: Simulator,
     map: list[list[Terrain]],
-    drones: dict[str, DroneState],
     mission_team: Callable[[MissionState], MissionState],
     monitoring_checks,
     sectors: dict[str, Sector] | None = None,
 ) -> MissionState:
-    drone_ids = list(drones)
+    queries = simulator.telemetry_queries
+    drone_ids = queries.drone_ids()
+    readings = queries.position(drone_ids)
+    positions: list[tuple[int, int]] = []
+    for drone_id in drone_ids:
+        samples = readings[drone_id]
+        if not samples or not isinstance(samples[-1].value, tuple):
+            raise ValueError(f"No reported initial position for drone {drone_id}")
+        positions.append(samples[-1].value)
     if sectors is None:
         sectors = create_sectors(map, len(drone_ids))
-    for drone in drones.values():
-        row, col = drone.position
+    for row, col in positions:
         if not (0 <= row < len(map) and 0 <= col < len(map[row])):
             raise ValueError("Drone positions must be within the terrain map")
     search_sectors = divide_search(
-        sectors, [drones[drone_id].position for drone_id in drone_ids]
+        sectors, positions
     )
     initial_plan = MissionPlan(
         plan={
-            drone_id: search_sectors[str(index)]
+            drone_id: search_sectors[str(index)].model_copy(update={"drone_id": drone_id})
             for index, drone_id in enumerate(drone_ids)
         }
     )
-    for drone_id in initial_plan.plan:
-        if not drones[drone_id].comms:
-            continue
-        drones[drone_id].assignment = "search for targets"
-
     mission_state = MissionState(
-        drones=drones,
+        drone_ids=drone_ids,
         objectives=[],
         no_fly_zones=[
             Region(
@@ -139,7 +138,7 @@ def mission(
         explored_cells=set(),
         completed_sectors=set(),
         current_plan=initial_plan,
-        telemetry={},
+        telemetry=[],
         proposed_plans=[],
         under_review=None,
         next_agent=None,
@@ -155,20 +154,7 @@ def mission(
             mission_state.mission_status = MissionStatus.FAILED
             break
 
-        simulator.drones = mission_state.drones
-        for drone_id, drone in mission_state.drones.items():
-            if drone.battery <= 0:
-                continue
-            if not drone.comms:
-                continue
-            objective = plan.plan.get(drone_id)
-            if isinstance(objective, Objective):
-                if objective.objective_type == ObjectiveType.HOLD:
-                    drone.assignment = "hold position"
-                elif objective.objective_type == ObjectiveType.RETURN_TO_BASE:
-                    drone.assignment = f"return to base at {BASE_POSITION}"
-
-        events, updated_drones, explored_cells, timestep = simulator.execute_plan(
+        events, explored_cells, timestep = simulator.execute_plan(
             plan.plan,
             monitoring_checks,
             sectors,
@@ -176,15 +162,11 @@ def mission(
             mission_state.explored_cells,
         )
         mission_state.explored_cells = explored_cells
-        mission_state.drones = updated_drones
         mission_state.step = timestep
         mission_state.latest_events = [
             MissionEvent(
                 description=event,
-                drones={
-                    drone_id: drone.model_copy(deep=True)
-                    for drone_id, drone in updated_drones.items()
-                },
+                step=timestep,
             )
             for event in events
         ]
@@ -195,7 +177,7 @@ def mission(
 
 
 if __name__ == "__main__":
-    from src.mission_graph import graph
+    from src.mission_graph import build_mission_graph
 
     def control_cycle(state: MissionState) -> MissionState:
         return MissionState.model_validate(graph.invoke(state))
@@ -204,12 +186,12 @@ if __name__ == "__main__":
     sorted_drone_positions = sorted(drone_positions, key=lambda x: x[0])
     drones = initialize_drone_states(sorted_drone_positions, default_battery=25.0)
     simulator = Simulator(truth_terrain, drones, targets=[(1, 7)])
+    graph = build_mission_graph(telemetry_queries=simulator.telemetry_queries).compile()
     sectors = create_sectors(terrain, len(drones))
 
     mission(
         simulator,
         terrain,
-        drones,
         mission_team=control_cycle,
         sectors=sectors,
         monitoring_checks={"battery_reserve_threshold": 10.0},

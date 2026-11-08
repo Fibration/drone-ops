@@ -14,6 +14,44 @@ class DroneState(BaseModel):
     assignment: str | None
 
 
+class TelemetryField(str, Enum):
+    BATTERY_LEVEL = "battery_level"
+    POSITION = "position"
+    COMMS = "comms"
+    STATUS = "status"
+    ASSIGNMENT = "assignment"
+
+
+class TelemetryRequest(BaseModel):
+    field: TelemetryField
+    drone_ids: list[str] | None = None
+    at_step: int | None = Field(default=None, ge=0)
+    history: bool = False
+
+
+class TelemetryReading(BaseModel):
+    drone_id: str
+    step: int
+    field: TelemetryField
+    value: bool | float | tuple[int, int] | str | None
+
+
+class TelemetryResult(BaseModel):
+    request: TelemetryRequest
+    readings: dict[str, list[TelemetryReading]]
+
+
+class TelemetryCapability(BaseModel):
+    field: TelemetryField
+    description: str
+    history_available: bool = True
+
+
+class TelemetrySnapshot(BaseModel):
+    step: int
+    drones: dict[str, DroneState]
+
+
 class MissionStatus(Enum):
     ONGOING = "ongoing"
     SUCCESS = "success"
@@ -49,8 +87,10 @@ class Target(BaseModel):
 
 
 class MissionEvent(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     description: str
-    drones: dict[str, DroneState]
+    step: int = 0
 
 
 class MissionPlan(BaseModel):
@@ -73,7 +113,9 @@ class AgentType(str, Enum):
 
 
 class MissionState(BaseModel):
-    drones: dict[str, DroneState]
+    model_config = ConfigDict(extra="forbid")
+
+    drone_ids: list[str]
     objectives: list[Objective]
     no_fly_zones: list[Region]
     discovered_targets: dict[str, Target]
@@ -82,7 +124,10 @@ class MissionState(BaseModel):
     latest_events: list[MissionEvent] = Field(default_factory=list)
     explored_cells: set[tuple[int, int]]
     completed_sectors: set[str] = Field(default_factory=set)
-    telemetry: dict[str, str | int | float]
+    telemetry: list[TelemetryResult] = Field(default_factory=list)
+    available_telemetry: list[TelemetryCapability] = Field(default_factory=list)
+    telemetry_requests: list[TelemetryRequest] = Field(default_factory=list)
+    new_target_ids: set[str] = Field(default_factory=set)
 
     current_plan: MissionPlan | None
     proposed_plans: list[Plan]

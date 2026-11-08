@@ -11,8 +11,8 @@ from src.models import AgentType, MissionState, MissionStatus
 class MissionGraphTest(unittest.TestCase):
     def state(self):
         return MissionState(
-            drones={}, objectives=[], no_fly_zones=[], discovered_targets={}, events=[],
-            explored_cells=set(), current_plan=None, telemetry={}, proposed_plans=[],
+            drone_ids=list({}), objectives=[], no_fly_zones=[], discovered_targets={}, events=[],
+            explored_cells=set(), current_plan=None, telemetry=[], proposed_plans=[],
             under_review=None, next_agent=None,
             safety_status=None, human_approval=None, step=0, mission_status=MissionStatus.ONGOING,
         )

@@ -31,7 +31,7 @@ class RouteFailureTest(unittest.TestCase):
         self.assertIsNone(controller.plan_step())
         drones = initialize_drone_states([(0, 0)], 25.0)
         simulator = Simulator(terrain, drones, [])
-        event, _, _, step = simulator.execute_plan(
+        event,  _, step = simulator.execute_plan(
             {"0": objective}, {"battery_reserve_threshold": 0.0}, {}, targets
         )
         self.assertEqual(event, ["Drone 0 cannot reach target target at (0, 2)"])
@@ -71,7 +71,7 @@ class RouteFailureTest(unittest.TestCase):
         sectors = {"sector": Sector(sector_id="sector", bounds=((0, 0), (0, 5)))}
         drones = initialize_drone_states([(0, 0)], 25.0)
         simulator = Simulator(terrain, drones, [])
-        event, _, _, step = simulator.execute_plan(
+        event,  _, step = simulator.execute_plan(
             {
                 "0": Objective(
                     drone_id="0",

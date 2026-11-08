@@ -12,7 +12,7 @@ class SensorObservationTest(unittest.TestCase):
         simulator = Simulator([[Terrain.EMPTY] * 9 for _ in range(9)], drones, [])
         plan = {"0": Objective(drone_id="0", objective_type=ObjectiveType.HOLD)}
         explored = set()
-        _, _, observed, step = simulator.execute_plan(
+        _,  observed, step = simulator.execute_plan(
             plan, {"battery_reserve_threshold": 0.0}, {}, {}, explored,
         )
         self.assertIs(observed, explored)

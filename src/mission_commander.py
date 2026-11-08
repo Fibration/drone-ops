@@ -114,7 +114,7 @@ def validate_decision(
     plan = {}
     for objective in decision.objectives:
         drone_id = objective.drone_id
-        if drone_id not in mission_state.drones or drone_id in plan:
+        if drone_id not in mission_state.drone_ids or drone_id in plan:
             raise ValueError(f"Unknown or duplicate drone ID: {drone_id!r}")
         if (
             objective.objective_type == ObjectiveType.SEARCH_SECTOR
@@ -127,7 +127,7 @@ def validate_decision(
         ):
             raise ValueError(f"Unknown target ID: {objective.target_id!r}")
         plan[drone_id] = objective
-    if plan.keys() != mission_state.drones.keys():
+    if plan.keys() != set(mission_state.drone_ids):
         raise ValueError("Commander must return one objective for every drone")
     return plan
 

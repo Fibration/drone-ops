@@ -21,7 +21,7 @@ class EventBatchTest(unittest.TestCase):
         targets = {"waypoint": Target(target_id="waypoint", position=(0, 3))}
         plan = {key: Objective(drone_id=key, objective_type=ObjectiveType.GOTO,
                                target_id="waypoint") for key in drones}
-        events, _, _, step = simulator.execute_plan(
+        events,  _, step = simulator.execute_plan(
             plan, {"battery_reserve_threshold": 0.0}, {}, targets,
         )
         self.assertEqual(events, ["Drone 0 cannot reach target waypoint at (0, 3)",
@@ -34,13 +34,13 @@ class EventBatchTest(unittest.TestCase):
         simulator = Simulator([[Terrain.EMPTY] * 4 for _ in range(2)], drones, [])
         plan = {key: Objective(drone_id=key, objective_type=ObjectiveType.RETURN_TO_BASE)
                 for key in drones}
-        events, _, explored, step = simulator.execute_plan(
+        events,  explored, step = simulator.execute_plan(
             plan, {"battery_reserve_threshold": 0.0}, {}, {},
         )
         self.assertEqual(step, 1)
         self.assertEqual(events, ["Drone 0 ran out of battery at (0, 2)",
                                   "Drone 1 ran out of battery at (0, 3)"])
-        events, _, _, step = simulator.execute_plan(
+        events,  _, step = simulator.execute_plan(
             plan, {"battery_reserve_threshold": 0.0}, {}, {}, explored,
         )
         self.assertEqual(events, ["Mission plan exhausted"])
@@ -52,7 +52,7 @@ class EventBatchTest(unittest.TestCase):
                               scenario={2: (IncidentType.COMMS_FAILURE, "0")})
         plan = {key: Objective(drone_id=key, objective_type=ObjectiveType.RETURN_TO_BASE)
                 for key in drones}
-        events, _, _, step = simulator.execute_plan(
+        events,  _, step = simulator.execute_plan(
             plan, {"battery_reserve_threshold": 22.0}, {}, {},
         )
         self.assertEqual(step, 5)
@@ -66,7 +66,7 @@ class EventBatchTest(unittest.TestCase):
                               targets=[(0, 4), (1, 3)])
         sectors = {"survey": Sector(sector_id="survey", bounds=((0, 4), (0, 4)))}
         targets = {"waypoint": Target(target_id="waypoint", position=(0, 8))}
-        events, _, _, step = simulator.execute_plan(
+        events,  _, step = simulator.execute_plan(
             {"0": Objective(drone_id="0", objective_type=ObjectiveType.GOTO,
                             target_id="waypoint")},
             {"battery_reserve_threshold": 0.0}, sectors, targets,
@@ -78,14 +78,14 @@ class EventBatchTest(unittest.TestCase):
 
     def make_state(self, descriptions):
         drones = initialize_drone_states([(0, 0), (1, 0)], 25.0)
-        events = [MissionEvent(description=text, drones=drones) for text in descriptions]
+        events = [MissionEvent(description=text) for text in descriptions]
         objectives = [Objective(drone_id=key, objective_type=ObjectiveType.HOLD)
                       for key in drones]
         state = MissionState(
-            drones=drones, objectives=[], no_fly_zones=[], discovered_targets={},
+            drone_ids=list(drones), objectives=[], no_fly_zones=[], discovered_targets={},
             events=events.copy(), latest_events=events, explored_cells=set(),
             current_plan=MissionPlan(plan={obj.drone_id: obj for obj in objectives}),
-            telemetry={}, proposed_plans=[], under_review=None,
+            telemetry=[], proposed_plans=[], under_review=None,
             next_agent=None, safety_status=None,
             human_approval=None, step=5, mission_status=MissionStatus.ONGOING,
         )
