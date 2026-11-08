@@ -179,6 +179,7 @@ class Simulator:
             elif objective.objective_type == ObjectiveType.SEARCH_SECTOR:
                 drone.assignment = "search for targets"
             elif objective.objective_type == ObjectiveType.GOTO:
+                assert objective.target_id
                 target = targets.get(objective.target_id)
                 drone.assignment = f"go to {target.position}" if target else "go to target"
             if controller.failure_event is not None:

@@ -169,7 +169,8 @@ class IncidentType(Enum):
     COMMS_FAILURE = auto()
 
 
-
-
 class Agent(Protocol):
     def run(self, state: MissionState) -> dict: ...
+
+
+type Point = tuple[int, int]
