@@ -2,7 +2,7 @@ from dataclasses import dataclass, field
 from typing import Literal, Protocol, TypeVar
 
 from src.models import (
-    AgentType, MissionState, MissionStatus, Objective, ObjectiveType, Plan,
+    AgentType, Evaluation, MissionState, MissionStatus, Objective, ObjectiveType, Plan,
     TelemetryField, TelemetryRequest, TelemetryResult,
 )
 from src.mission_updates import (
@@ -12,7 +12,6 @@ from src.mission_updates import (
 from src.telemetry import TelemetryQueries
 
 Result = TypeVar("Result", covariant=True)
-SafetyOutcome = Literal["approve", "revise", "human_reviewer"]
 
 
 class Policy(Protocol[Result]):
@@ -21,11 +20,12 @@ class Policy(Protocol[Result]):
 
 @dataclass(frozen=True)
 class CommanderRoutingDecision:
-    next_agent: AgentType | None
+    next_agent: AgentType | Literal["human_reviewer"] | None
     under_review: Plan | None = None
     mission_status: MissionStatus = MissionStatus.ONGOING
     needs_replan: bool = True
     telemetry_requests: list[TelemetryRequest] = field(default_factory=list)
+    commander_rethink: Evaluation | None = None
 
 
 @dataclass(frozen=True)
@@ -61,6 +61,18 @@ class NaiveMissionCommanderPolicy:
         status = evaluate_mission_status(state)
         if status != MissionStatus.ONGOING:
             return CommanderRoutingDecision(next_agent=None, mission_status=status)
+        if state.human_approval is False:
+            return CommanderRoutingDecision(
+                next_agent=AgentType.MISSION_PLANNER,
+                commander_rethink=Evaluation(
+                    decision="revise", reason="Revise the plan rejected by the human reviewer."
+                ),
+            )
+        if state.safety_status is not None and state.safety_status.decision == "revise":
+            return CommanderRoutingDecision(
+                next_agent=AgentType.MISSION_PLANNER,
+                commander_rethink=Evaluation(decision="revise", reason=state.safety_status.reason),
+            )
         if state.telemetry_requests:
             return CommanderRoutingDecision(
                 next_agent=AgentType.FLEET_MONITOR,
@@ -111,5 +123,5 @@ class NaiveMissionPlannerPolicy:
 
 
 class NaiveSafetyReviewerPolicy:
-    def evaluate(self, state: MissionState) -> SafetyOutcome:
-        return "approve"
+    def evaluate(self, state: MissionState) -> Evaluation:
+        return Evaluation(decision="approve", reason="Approved by the default safety policy.")

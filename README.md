@@ -87,26 +87,35 @@ config:
     curve: linear
 ---
 graph TD;
-        __start__([<p>__start__</p>]):::first
-        fleet_monitor(fleet_monitor)
-        mission_commander(mission_commander)
-        mission_planner(mission_planner)
-        safety_reviewer(safety_reviewer)
-        human_reviewer(human_reviewer)
-        __end__([<p>__end__</p>]):::last
-        __start__ --> fleet_monitor;
-        fleet_monitor --> mission_commander;
-        human_reviewer -. &nbsp;approve&nbsp; .-> __end__;
-        human_reviewer -. &nbsp;revise&nbsp; .-> mission_planner;
-        mission_commander -. &nbsp;finish&nbsp; .-> __end__;
-        mission_commander -.-> fleet_monitor;
-        mission_commander -.-> mission_planner;
-        mission_commander -.-> safety_reviewer;
-        mission_planner --> mission_commander;
-        safety_reviewer -. &nbsp;approve&nbsp; .-> __end__;
-        safety_reviewer -.-> human_reviewer;
-        safety_reviewer -. &nbsp;revise&nbsp; .-> mission_planner;
+	__start__([<p>__start__</p>]):::first
+	FLEET_MONITOR(FLEET_MONITOR)
+	MISSION_COMMANDER(MISSION_COMMANDER)
+	MISSION_PLANNER(MISSION_PLANNER)
+	SAFETY_REVIEWER(SAFETY_REVIEWER)
+	human_reviewer(human_reviewer)
+	__end__([<p>__end__</p>]):::last
+	MISSION_COMMANDER -. &nbsp;AgentType.FLEET_MONITOR&nbsp; .-> FLEET_MONITOR;
+	MISSION_COMMANDER -. &nbsp;AgentType.MISSION_PLANNER&nbsp; .-> MISSION_PLANNER;
+	MISSION_COMMANDER -. &nbsp;AgentType.SAFETY_REVIEWER&nbsp; .-> SAFETY_REVIEWER;
+	MISSION_COMMANDER -.-> __end__;
+	MISSION_COMMANDER -.-> human_reviewer;
+	MISSION_PLANNER --> MISSION_COMMANDER;
+	SAFETY_REVIEWER -. &nbsp;AgentType.FLEET_MONITOR&nbsp; .-> FLEET_MONITOR;
+	SAFETY_REVIEWER -. &nbsp;AgentType.MISSION_COMMANDER&nbsp; .-> MISSION_COMMANDER;
+	__start__ --> MISSION_COMMANDER;
+	human_reviewer -. &nbsp;AgentType.FLEET_MONITOR&nbsp; .-> FLEET_MONITOR;
+	human_reviewer -. &nbsp;AgentType.MISSION_COMMANDER&nbsp; .-> MISSION_COMMANDER;
+	FLEET_MONITOR --> __end__;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc
 ```
+
+Each planning cycle starts at the commander. Safety revisions return to the
+commander, who can request replanning, resubmit a proposal, or send it to
+`human_reviewer` for arbitration. Safety and human approvals pass through the
+fleet monitor before the cycle ends; human rejection returns to the commander.
+Safety outcomes are `Evaluation` objects with `decision` and `reason`.
 
 The simulator owns drone state, controllers, and telemetry history. Mission state
 contains known `drone_ids` and received telemetry, while events contain a description

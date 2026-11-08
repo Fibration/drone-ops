@@ -1,4 +1,4 @@
-from src.models import Agent, AgentType, MissionPlan, MissionState, Plan
+from src.models import Agent, AgentType, Evaluation, MissionPlan, MissionState, Plan
 from src.mission_updates import update_completed_sectors, update_discovered_targets, update_no_fly_zones
 from src.telemetry import RecordedTelemetry, TelemetryQueries, merge_telemetry
 from src.policy import (
@@ -10,7 +10,6 @@ from src.policy import (
     NaiveMissionPlannerPolicy,
     NaiveSafetyReviewerPolicy,
     Policy,
-    SafetyOutcome,
 )
 
 
@@ -64,12 +63,21 @@ class MissionCommander(Agent):
 
     def run(self, state: MissionState) -> dict:
         decision = self.policy.evaluate(state)
-        return {
+        update = {
             "next_agent": decision.next_agent, "under_review": decision.under_review,
             "mission_status": decision.mission_status,
             "needs_replan": decision.needs_replan,
             "telemetry_requests": decision.telemetry_requests,
+            "commander_rethink": decision.commander_rethink,
         }
+        if decision.next_agent == AgentType.MISSION_PLANNER:
+            update.update({"proposed_plans": [], "safety_status": None, "human_approval": None})
+        elif decision.next_agent == AgentType.SAFETY_REVIEWER:
+            update.update({"safety_status": None, "human_approval": None})
+        elif decision.next_agent == "human_reviewer":
+            update["under_review"] = decision.under_review or state.under_review
+            update["human_approval"] = None
+        return update
 
 
 class MissionPlanner(Agent):
@@ -81,15 +89,19 @@ class MissionPlanner(Agent):
 
 
 class SafetyReviewer(Agent):
-    def __init__(self, policy: Policy[SafetyOutcome] | None = None):
+    def __init__(self, policy: Policy[Evaluation] | None = None):
         self.policy = policy if policy is not None else NaiveSafetyReviewerPolicy()
 
     def run(self, state: MissionState) -> dict:
         outcome = self.policy.evaluate(state)
+        if outcome.decision not in ("approve", "revise"):
+            raise ValueError(f"Invalid safety review outcome: {outcome.decision!r}")
         update: dict = {"safety_status": outcome}
-        if outcome == "approve":
+        if outcome.decision == "approve":
             if state.under_review is None:
                 raise ValueError("No proposed plan selected for approval")
             update["current_plan"] = MissionPlan(plan=state.under_review.plan)
             update["needs_replan"] = False
+        else:
+            update["needs_replan"] = True
         return update

@@ -118,6 +118,11 @@ class AgentType(str, Enum):
     SAFETY_REVIEWER = "SAFETY_REVIEWER"
 
 
+class Evaluation(BaseModel):
+    decision: str
+    reason: str
+
+
 class MissionState(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -140,8 +145,9 @@ class MissionState(BaseModel):
     under_review: Plan | None
     needs_replan: bool = True
 
-    next_agent: AgentType | None
-    safety_status: str | None
+    next_agent: AgentType | Literal["human_reviewer"] | None
+    safety_status: Evaluation | None
+    commander_rethink: Evaluation | None = None
     human_approval: bool | None
 
     step: int

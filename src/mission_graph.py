@@ -7,7 +7,6 @@ from src.agent import FleetMonitor, MissionCommander, MissionPlanner, SafetyRevi
 from src.telemetry import TelemetryQueries
 from src.models import AgentType, MissionPlan, MissionState, MissionStatus
 
-
 HUMAN_REVIEW_NODE: Literal["human_reviewer"] = "human_reviewer"
 NodeName = AgentType | Literal["human_reviewer"]
 StateUpdate = dict[str, Any]
@@ -35,7 +34,11 @@ def safety_reviewer(state: MissionState) -> StateUpdate:
 
 def human_reviewer(state: MissionState) -> StateUpdate:
     assert state.under_review is not None
-    human_decision = input(f"{state.under_review.model_dump()} [y/n]?")
+    human_decision = input(
+        f"Plan: {state.under_review.model_dump()}\n"
+        f"Safety review: {state.safety_status}\n"
+        f"Commander assessment: {state.commander_rethink}\nApprove [y/n]?"
+    )
     if human_decision == "y":
         return {
             "human_approval": True,
@@ -43,7 +46,7 @@ def human_reviewer(state: MissionState) -> StateUpdate:
             "needs_replan": False,
         }
     elif human_decision == "n":
-        return {"human_approval": False}
+        return {"human_approval": False, "needs_replan": True}
     else:
         raise ValueError("Invalid human reviewer decision.")
 
@@ -52,11 +55,13 @@ def route_commander(state: MissionState) -> str:
     if state.mission_status != MissionStatus.ONGOING:
         return END
     if not state.needs_replan and state.current_plan is not None:
-        return END
+        return AgentType.FLEET_MONITOR
     destination = state.next_agent
     if destination is None or destination not in {
-        AgentType.FLEET_MONITOR, AgentType.MISSION_PLANNER,
+        AgentType.FLEET_MONITOR,
+        AgentType.MISSION_PLANNER,
         AgentType.SAFETY_REVIEWER,
+        HUMAN_REVIEW_NODE,
     }:
         raise ValueError(f"Invalid commander destination: {destination!r}")
     return destination
@@ -64,27 +69,27 @@ def route_commander(state: MissionState) -> str:
 
 def route_safety_review(state: MissionState) -> str:
     routes: dict[str, str] = {
-        "approve": END,
-        "revise": AgentType.MISSION_PLANNER,
-        "human_reviewer": HUMAN_REVIEW_NODE,
+        "approve": AgentType.FLEET_MONITOR,
+        "revise": AgentType.MISSION_COMMANDER,
     }
     outcome = state.safety_status
-    if outcome is None or outcome not in routes:
+    if outcome is None or outcome.decision not in routes:
         raise ValueError(f"Invalid safety review outcome: {outcome!r}")
-    return routes[outcome]
+    return routes[outcome.decision]
 
 
 def route_human_review(state: MissionState) -> str:
     if state.human_approval is True:
-        return END
+        return AgentType.FLEET_MONITOR
     if state.human_approval is False:
-        return AgentType.MISSION_PLANNER
+        return AgentType.MISSION_COMMANDER
     raise ValueError(f"Invalid human review outcome: {state.human_approval!r}")
 
 
 def build_mission_graph(
     nodes: Mapping[NodeName, NodeHandler] | None = None,
-    *, telemetry_queries: TelemetryQueries | None = None,
+    *,
+    telemetry_queries: TelemetryQueries | None = None,
 ) -> StateGraph[MissionState]:
     """Build the README workflow, optionally supplying concrete node handlers."""
     handlers: dict[NodeName, NodeHandler] = {
@@ -103,30 +108,36 @@ def build_mission_graph(
     builder = StateGraph(MissionState)
     for name, handler in handlers.items():
         builder.add_node(name.value if isinstance(name, AgentType) else name, handler)
-    builder.add_edge(START, AgentType.FLEET_MONITOR.value)
-    builder.add_edge(AgentType.FLEET_MONITOR.value, AgentType.MISSION_COMMANDER.value)
+    builder.add_edge(START, AgentType.MISSION_COMMANDER.value)
     builder.add_conditional_edges(
-        AgentType.MISSION_COMMANDER.value, route_commander,
+        AgentType.MISSION_COMMANDER.value,
+        route_commander,
         {
             AgentType.FLEET_MONITOR: AgentType.FLEET_MONITOR.value,
             AgentType.MISSION_PLANNER: AgentType.MISSION_PLANNER.value,
             AgentType.SAFETY_REVIEWER: AgentType.SAFETY_REVIEWER.value,
+            HUMAN_REVIEW_NODE: HUMAN_REVIEW_NODE,
             END: END,
         },
     )
     builder.add_edge(AgentType.MISSION_PLANNER.value, AgentType.MISSION_COMMANDER.value)
     builder.add_conditional_edges(
-        AgentType.SAFETY_REVIEWER.value, route_safety_review,
+        AgentType.SAFETY_REVIEWER.value,
+        route_safety_review,
         {
-            END: END,
-            AgentType.MISSION_PLANNER: AgentType.MISSION_PLANNER.value,
-            HUMAN_REVIEW_NODE: HUMAN_REVIEW_NODE,
+            AgentType.FLEET_MONITOR: AgentType.FLEET_MONITOR.value,
+            AgentType.MISSION_COMMANDER: AgentType.MISSION_COMMANDER.value,
         },
     )
     builder.add_conditional_edges(
-        HUMAN_REVIEW_NODE, route_human_review,
-        {END: END, AgentType.MISSION_PLANNER: AgentType.MISSION_PLANNER.value},
+        HUMAN_REVIEW_NODE,
+        route_human_review,
+        {
+            AgentType.FLEET_MONITOR: AgentType.FLEET_MONITOR.value,
+            AgentType.MISSION_COMMANDER: AgentType.MISSION_COMMANDER.value,
+        },
     )
+    builder.add_edge(AgentType.FLEET_MONITOR.value, END)
     return builder
 
 

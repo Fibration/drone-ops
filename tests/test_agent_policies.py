@@ -4,7 +4,7 @@ from unittest.mock import Mock
 from src.agent import FleetMonitor, MissionCommander, MissionPlanner, SafetyReviewer
 from src.mission_graph import build_mission_graph
 from src.models import (
-    AgentType, MissionEvent, MissionPlan, MissionState, MissionStatus,
+    AgentType, Evaluation, MissionEvent, MissionPlan, MissionState, MissionStatus,
     Objective, ObjectiveType, Plan, Target,
 )
 from src.policy import (
@@ -31,9 +31,11 @@ class AgentPolicyTest(unittest.TestCase):
             (MissionCommander, CommanderRoutingDecision(AgentType.SAFETY_REVIEWER, candidate),
              {"next_agent": AgentType.SAFETY_REVIEWER, "under_review": candidate,
               "mission_status": MissionStatus.ONGOING, "needs_replan": True,
-              "telemetry_requests": []}),
+              "telemetry_requests": [], "commander_rethink": None,
+              "safety_status": None, "human_approval": None}),
             (MissionPlanner, [candidate], {"proposed_plans": [candidate]}),
-            (SafetyReviewer, "revise", {"safety_status": "revise"}),
+            (SafetyReviewer, Evaluation(decision="revise", reason="Review"),
+             {"safety_status": Evaluation(decision="revise", reason="Review"), "needs_replan": True}),
         ]
         for agent_type, policy_result, expected in cases:
             with self.subTest(agent=agent_type.__name__):
@@ -55,7 +57,8 @@ class AgentPolicyTest(unittest.TestCase):
         self.assertEqual(MissionCommander().run(state), {
             "next_agent": AgentType.MISSION_PLANNER, "under_review": None,
             "mission_status": MissionStatus.ONGOING, "needs_replan": True,
-            "telemetry_requests": [],
+            "telemetry_requests": [], "commander_rethink": None,
+            "proposed_plans": [], "safety_status": None, "human_approval": None,
         })
 
     def test_naive_commander_selects_first_proposed_plan(self):
