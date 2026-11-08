@@ -1,9 +1,10 @@
 from dataclasses import dataclass
+from collections.abc import Iterator
 from enum import Enum
 import random
 from math import ceil, floor, sqrt
 
-from src.map import Terrain
+from src.models import Terrain
 from src.models import DroneState, IncidentType, Point
 
 
@@ -110,12 +111,15 @@ class World:
         obstacles: list[Point],
         no_fly: list[Point],
         drones: dict[str, DroneState],
+        base_position: Point = (0, 0),
     ):
         self.sectors = sectors
         self.target_count = targets
         self.obstacles = set(obstacles)
         self.no_fly = set(no_fly)
         self.drones = dict(drones)
+        self.base_position = base_position
+        # Original placements are retained after rescue or expiry.
         self.targets: dict[str, Point] = {}
         self.active_targets: dict[str, list[str]] = {
             sector.sector_id: [] for sector in sectors
@@ -123,8 +127,28 @@ class World:
         self.failed_targets: list[str] = []
         self.successful_targets: list[str] = []
         self.success_times: dict[str, float] = {}
-        self._target_cells: set[Point] = set()
         self._place_targets()
+
+    def sector_at(self, cell: Point) -> Sector | None:
+        return next((sector for sector in self.sectors if sector.in_sector(cell)), None)
+
+    def navigation_map(self, drone_id: str) -> list[list[Terrain]]:
+        """Terrain for routing, with the shared base open to returning drones."""
+        width = max(sector.bounds[1][0] for sector in self.sectors) + 1
+        height = max(sector.bounds[1][1] for sector in self.sectors) + 1
+        terrain = [[Terrain.EMPTY] * height for _ in range(width)]
+        for cells, kind in (
+            (self.obstacles, Terrain.OBSTACLE),
+            (self.no_fly, Terrain.NO_FLY_ZONE),
+        ):
+            for x, y in cells:
+                terrain[x][y] = kind
+        for other_id, drone in self.drones.items():
+            if other_id != drone_id and drone.position != self.base_position:
+                x, y = drone.position
+                if terrain[x][y] is Terrain.EMPTY:
+                    terrain[x][y] = Terrain.DRONE
+        return terrain
 
     def _place_targets(self):
         occupied = (
@@ -177,7 +201,6 @@ class World:
             target_id = f"target_{len(self.targets)}"
             self.targets[target_id] = cell
             self.active_targets[self.sectors[index].sector_id].append(target_id)
-            self._target_cells.add(cell)
             occupied.add(cell)
             if not cells:
                 indices.remove(index)
@@ -193,9 +216,16 @@ class World:
 
     def check_for_target(self, cell: Point) -> Terrain:
         terrain = self.check_cell(cell)
-        if terrain is Terrain.EMPTY and cell in self._target_cells:
+        if terrain is Terrain.EMPTY and any(
+            position == cell for _, position in self.iter_active_targets()
+        ):
             return Terrain.TARGET
         return terrain
+
+    def iter_active_targets(self) -> Iterator[tuple[str, Point]]:
+        for target_ids in self.active_targets.values():
+            for target_id in target_ids:
+                yield target_id, self.targets[target_id]
 
     def update_active_targets(self):
         for sector in self.sectors:
@@ -205,7 +235,6 @@ class World:
             for target_id in previous:
                 if target_id not in remaining_ids:
                     self.failed_targets.append(target_id)
-                    self._target_cells.discard(self.targets.pop(target_id))
             self.active_targets[sector.sector_id] = remaining
 
     def update_target_success(self, target_id: str, success_time: float):
@@ -213,13 +242,12 @@ class World:
 
         Raises KeyError if the target is unknown or already resolved.
         """
-        if target_id not in self.targets:
-            raise KeyError(target_id)
         for target_ids in self.active_targets.values():
             if target_id in target_ids:
                 target_ids.remove(target_id)
                 break
-        self._target_cells.discard(self.targets.pop(target_id))
+        else:
+            raise KeyError(target_id)
         self.successful_targets.append(target_id)
         self.success_times[target_id] = success_time
 
@@ -344,4 +372,11 @@ def generate_world(scenario: Scenario) -> World:
         )
         for index in range(scenario.num_drones)
     }
-    return World(sectors, scenario.num_targets, obstacles, list(no_fly), drones)
+    return World(
+        sectors,
+        scenario.num_targets,
+        obstacles,
+        list(no_fly),
+        drones,
+        base_position=scenario.base_position,
+    )

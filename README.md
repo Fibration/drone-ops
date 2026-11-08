@@ -1,6 +1,40 @@
 # drone-ops
 Agentic Multi-UAV Mission Control &amp; Incident Recovery
 
+The simulator takes a generated `World` and its `Scenario`:
+
+```python
+from src.models import Objective, ObjectiveType
+from src.scenario import Difficulty, Scenario, Weather, generate_world
+from src.simulator import Simulator
+
+scenario = Scenario(
+    world_size=(25, 25), num_sectors=4, num_targets=12,
+    difficulty=Difficulty.MEDIUM, num_drones=3, base_position=(0, 0),
+    events={}, weather=Weather.CLOUDY,
+)
+simulator = Simulator(generate_world(scenario), scenario)
+events = simulator.step({
+    drone_id: Objective(drone_id=drone_id,
+                        objective_type=ObjectiveType.SEARCH_SECTOR,
+                        sector_id=str(index))
+    for index, drone_id in enumerate(simulator.drones)
+})
+```
+
+`step()` advances one turn and retains accepted orders when no plan is supplied.
+An empty plan holds all connected drones. `execute_plan(plan, max_steps=80)` runs
+until an event or the turn limit and returns `(events, explored_cells, timestep)`.
+The simulator exposes `discovered_targets` as target IDs mapped to positions;
+use those IDs with `GOTO` orders. Reaching a target records a rescue in
+`simulator.world`; remaining targets can expire each turn. Sensing uses sector
+visibility and weather, and movement uses the destination sector's battery cost.
+The scenario supplies incidents and weather transitions each turn.
+All drones can share `world.base_position`.
+
+The older mission orchestration below still uses the previous simulator API and
+needs migration before it can run with this simulator.
+
 The fleet-monitor policy receives telemetry query functions rather than raw drone
 state. Available functions are `battery_level`, `position`, `comms`, `status`, and
 `assignment`; `available_telemetry()` describes them and `drone_ids()` lists drones.

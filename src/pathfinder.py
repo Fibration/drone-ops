@@ -1,7 +1,7 @@
 from heapq import heappop, heappush
 from dataclasses import dataclass
 
-from src.map import Terrain
+from src.models import Terrain
 
 
 @dataclass(frozen=True)
@@ -31,10 +31,12 @@ def astar(
             raise ValueError("Start and end must be within the terrain map")
     if start == end:
         return []
+
     def is_blocked(position: tuple[int, int]) -> bool:
         row, col = position
         return terrain_map[row][col] in blocked and not (
-            allow_occupied_end and position == end
+            allow_occupied_end
+            and position == end
             and terrain_map[row][col] == Terrain.DRONE
         )
 

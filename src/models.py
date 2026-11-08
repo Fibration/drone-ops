@@ -2,7 +2,13 @@ from pydantic import BaseModel, ConfigDict, Field
 from typing import Literal, Protocol
 from enum import Enum, auto
 
-from src.map import Terrain
+
+class Terrain(Enum):
+    EMPTY = 0
+    DRONE = 1
+    OBSTACLE = 2
+    NO_FLY_ZONE = 3
+    TARGET = 4
 
 
 class DroneState(BaseModel):

@@ -1,6 +1,8 @@
 from enum import Enum
 import re
 
+from src.models import Terrain
+
 
 def no_fly_zone_from_event(description: str) -> list[tuple[int, int]] | None:
     match = re.fullmatch(
@@ -13,18 +15,8 @@ def no_fly_zone_from_event(description: str) -> list[tuple[int, int]] | None:
     if top > bottom or left > right:
         raise ValueError("No-fly zone bounds must be in ascending order")
     return [
-        (row, col)
-        for row in range(top, bottom + 1)
-        for col in range(left, right + 1)
+        (row, col) for row in range(top, bottom + 1) for col in range(left, right + 1)
     ]
-
-
-class Terrain(Enum):
-    EMPTY = 0
-    DRONE = 1
-    OBSTACLE = 2
-    NO_FLY_ZONE = 3
-    TARGET = 4
 
 
 def prepare_map(
