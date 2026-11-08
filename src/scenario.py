@@ -114,6 +114,7 @@ class World:
         base_position: Point = (0, 0),
     ):
         self.sectors = sectors
+        self.sector_neighbours = self._build_sector_neighbours()
         self.target_count = targets
         self.obstacles = set(obstacles)
         self.no_fly = set(no_fly)
@@ -131,6 +132,23 @@ class World:
 
     def sector_at(self, cell: Point) -> Sector | None:
         return next((sector for sector in self.sectors if sector.in_sector(cell)), None)
+
+    def _build_sector_neighbours(self) -> dict[str, tuple[str, ...]]:
+        """Cache shared-edge adjacency, including partially overlapping edges."""
+        neighbours: dict[str, list[str]] = {s.sector_id: [] for s in self.sectors}
+        for index, sector in enumerate(self.sectors):
+            (x0, y0), (x1, y1) = sector.bounds
+            for other in self.sectors[index + 1:]:
+                (ox0, oy0), (ox1, oy1) = other.bounds
+                if (
+                    ((x1 + 1 == ox0 or ox1 + 1 == x0)
+                     and max(y0, oy0) <= min(y1, oy1))
+                    or ((y1 + 1 == oy0 or oy1 + 1 == y0)
+                        and max(x0, ox0) <= min(x1, ox1))
+                ):
+                    neighbours[sector.sector_id].append(other.sector_id)
+                    neighbours[other.sector_id].append(sector.sector_id)
+        return {sector_id: tuple(ids) for sector_id, ids in neighbours.items()}
 
     def navigation_map(self, drone_id: str) -> list[list[Terrain]]:
         """Terrain for routing, with the shared base open to returning drones."""
@@ -255,11 +273,19 @@ class World:
         self.drones[drone_id] = drone_state
 
     def update_sector_weather(self, scenario_weather: Weather):
+        levels = {sector.sector_id: sector.weather.value for sector in self.sectors}
+        neighbour_averages = {
+            sector_id: (sum(levels[neighbour] for neighbour in neighbours) / len(neighbours)
+                        if neighbours else scenario_weather.value)
+            for sector_id, neighbours in self.sector_neighbours.items()
+        }
         for sector in self.sectors:
-            current = sector.weather.value
-            # Favor persistence and adjacent states, drifting toward scenario weather.
-            improve_probability = 0.2 if current > scenario_weather.value else 0.1
-            worsen_probability = 0.2 if current < scenario_weather.value else 0.1
+            current = levels[sector.sector_id]
+            neighbour_average = neighbour_averages[sector.sector_id]
+            desired = 0.5 * scenario_weather.value + 0.5 * neighbour_average
+            # Favor persistence and adjacent states, drifting toward the combined level.
+            improve_probability = 0.2 if current > desired else 0.1
+            worsen_probability = 0.2 if current < desired else 0.1
             transition = random.random()
             if transition < improve_probability:
                 sector.weather = Weather(max(Weather.CLEAR.value, current - 1))
@@ -277,6 +303,7 @@ class Scenario:
     base_position: Point
     events: dict[int, tuple[IncidentType, str]]
     weather: Weather
+    recharge_rate: float
 
 
 def generate_world(scenario: Scenario) -> World:

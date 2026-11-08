@@ -1,8 +1,10 @@
+import random
+
 from src.drone import DroneController
 from src.map import no_fly_zone_from_event
 from src.models import IncidentType, Objective, ObjectiveType, Point, TelemetrySnapshot
 from src.parameters import monitoring_interval
-from src.scenario import Scenario, World
+from src.scenario import Scenario, Weather, World
 from src.telemetry import RecordedTelemetry
 
 
@@ -105,7 +107,8 @@ class Simulator:
         """Advance one turn. None keeps accepted orders; an empty plan holds all drones.
 
         Movement uses the destination sector's cost and current weather. Rescues
-        occur before target decay. Weather evolves each turn.
+        occur before target decay. Weather evolves each turn. Drones ending a
+        turn at base recharge, capped at 100 battery units.
         """
         if plan is not None:
             unknown = set(plan) - self.drones.keys()
@@ -159,6 +162,21 @@ class Simulator:
             if (controller.objective.objective_type == ObjectiveType.RETURN_TO_BASE
                     and position == self.world.base_position):
                 events.append(f"Drone {drone_id} returned to base at {position}")
+
+        for drone_id, drone in self.drones.items():
+            if drone.position == self.world.base_position:
+                drone.battery = min(100.0, drone.battery + self.scenario.recharge_rate)
+                if drone.battery > 0:
+                    self._reported_empty_batteries.discard(drone_id)
+            elif drone.comms and drone.battery > 0:
+                sector = self.world.sector_at(drone.position)
+                comms_failure_probability = {
+                    Weather.STORMY: 0.01,
+                    Weather.BLIZZARD: 0.02,
+                }.get(sector.weather, 0.0) if sector is not None else 0.0
+                if (comms_failure_probability
+                        and random.random() < comms_failure_probability):
+                    drone.comms = False
 
         # A drone's last battery-powered move can still complete a rescue.
         for drone_id, drone in self.drones.items():

@@ -30,6 +30,131 @@ def add_target(w, position):
 
 
 class WorldSimulationTest(unittest.TestCase):
+    def test_cached_neighbours_handle_staggered_three_two_three_layout(self):
+        bounds = [((0, 0), (1, 1)), ((0, 2), (1, 3)), ((0, 4), (1, 5)),
+                  ((2, 0), (3, 2)), ((2, 3), (3, 5)),
+                  ((4, 0), (5, 1)), ((4, 2), (5, 3)), ((4, 4), (5, 5))]
+        sectors = [Sector(str(i), bounds, 2, 1, 0, Weather.CLOUDY, 0)
+                   for i, bounds in enumerate(bounds)]
+        w = World(sectors, 0, [], [], {})
+        self.assertEqual({key: set(ids) for key, ids in w.sector_neighbours.items()}, {
+            '0': {'1', '3'}, '1': {'0', '2', '3', '4'}, '2': {'1', '4'},
+            '3': {'0', '1', '4', '5', '6'}, '4': {'1', '2', '3', '6', '7'},
+            '5': {'3', '6'}, '6': {'3', '4', '5', '7'}, '7': {'4', '6'},
+        })
+        with patch.object(w, '_build_sector_neighbours', side_effect=AssertionError('rebuilt')):
+            w.update_sector_weather(Weather.CLOUDY)
+
+    def test_weather_neighbour_averages_use_snapshot_and_ignore_sector_order(self):
+        for reverse in (False, True):
+            sectors = [Sector(str(i), ((0, i), (0, i)), 2, 1, 0, weather,
+                              population_rate=0)
+                       for i, weather in enumerate((Weather.CLOUDY, Weather.CLOUDY,
+                                                    Weather.BLIZZARD))]
+            if reverse:
+                sectors.reverse()
+            w = World(sectors, 0, [], [], {})
+            rolls = {'0': 0.15, '1': 0.25, '2': 0.9}
+            with patch('src.scenario.random.random',
+                       side_effect=[rolls[s.sector_id] for s in sectors]):
+                w.update_sector_weather(Weather.CLEAR)
+            self.assertEqual({s.sector_id: s.weather for s in sectors},
+                             {'0': Weather.CLEAR, '1': Weather.FOGGY,
+                              '2': Weather.BLIZZARD})
+
+    def test_weather_scenario_and_neighbours_have_equal_weight(self):
+        for scenario_weather, neighbour_weather, current in (
+            (Weather.CLEAR, Weather.FOGGY, Weather.CLOUDY),
+            (Weather.BLIZZARD, Weather.CLEAR, Weather.FOGGY),
+        ):
+            sectors = [Sector('0', ((0, 0), (0, 0)), 2, 1, 0, current, 0),
+                       Sector('1', ((0, 1), (0, 1)), 2, 1, 0, neighbour_weather, 0),
+                       # A diagonal sector must not influence sector 0.
+                       Sector('2', ((1, 1), (1, 1)), 2, 1, 0, Weather.BLIZZARD, 0)]
+            w = World(sectors, 0, [], [], {})
+            with patch('src.scenario.random.random', return_value=0.25):
+                w.update_sector_weather(scenario_weather)
+            self.assertEqual(sectors[0].weather, current)
+
+    def test_isolated_sector_weather_falls_back_to_scenario(self):
+        w = world(weather=Weather.CLOUDY)
+        with patch('src.scenario.random.random', return_value=0.25):
+            w.update_sector_weather(Weather.BLIZZARD)
+        self.assertEqual(w.sectors[0].weather, Weather.FOGGY)
+
+    def test_weather_comms_failure_probabilities_for_moving_drones(self):
+        for weather, roll, expected in (
+            (Weather.STORMY, 0.009, False),
+            (Weather.STORMY, 0.01, True),
+            (Weather.BLIZZARD, 0.019, False),
+            (Weather.BLIZZARD, 0.02, True),
+            (Weather.CLEAR, 0.0, True),
+            (Weather.CLOUDY, 0.0, True),
+            (Weather.FOGGY, 0.0, True),
+        ):
+            with self.subTest(weather=weather, roll=roll):
+                w = world(weather=weather, drones={'0': drone(position=(0, 4))})
+                sim = self.simulator(w)
+                with patch('src.simulator.random.random', return_value=roll):
+                    sim.step({'0': order(ObjectiveType.RETURN_TO_BASE)})
+                self.assertEqual(w.drones['0'].comms, expected)
+                self.assertEqual(w.drones['0'].position, (0, 3))
+                self.assertEqual(sim.telemetry_history[-1].drones['0'].comms, expected)
+
+        w = world(weather=Weather.BLIZZARD)
+        sim = self.simulator(w)
+        with patch('src.simulator.random.random', return_value=0.0) as roll:
+            sim.step({})
+        self.assertTrue(w.drones['0'].comms)
+        roll.assert_not_called()
+
+    def test_holding_drones_face_weather_risk_each_turn(self):
+        for weather, probability in ((Weather.STORMY, 0.01), (Weather.BLIZZARD, 0.02)):
+            with self.subTest(weather=weather):
+                w = world(weather=weather, drones={'0': drone(position=(0, 4))})
+                sim = self.simulator(w)
+                with patch('src.simulator.random.random',
+                           side_effect=[probability, 0.0]) as roll:
+                    sim.step({})
+                    self.assertTrue(w.drones['0'].comms)
+                    sim.step({})
+                self.assertFalse(w.drones['0'].comms)
+                self.assertEqual(w.drones['0'].position, (0, 4))
+                self.assertEqual(roll.call_count, 2)
+                with patch('src.simulator.random.random') as roll:
+                    sim.step({})
+                roll.assert_not_called()
+
+        w = world(weather=Weather.BLIZZARD,
+                  drones={'0': drone(position=(0, 4), battery=0)})
+        sim = self.simulator(w)
+        with patch('src.simulator.random.random') as roll:
+            sim.step({})
+        roll.assert_not_called()
+
+    def test_base_recharges_empty_batteries_and_caps_at_100(self):
+        w = world(drones={
+            '0': drone(battery=0), '1': drone('1', battery=98),
+            '2': drone('2', position=(4, 6), battery=20),
+        })
+        w.base_position = (1, 1)
+        w.drones['0'].position = w.drones['1'].position = w.base_position
+        sim = self.simulator(w, recharge_rate=5.0)
+        sim.step({})
+        self.assertEqual([d.battery for d in w.drones.values()], [5.0, 100.0, 20])
+        sim.step({})
+        self.assertEqual([d.battery for d in w.drones.values()], [10.0, 100.0, 20])
+        self.assertEqual(sim.telemetry_history[-1].drones['0'].battery, 10.0)
+
+    def test_arriving_at_base_recharges_but_departing_does_not(self):
+        w = world(drones={'0': drone(position=(0, 1))})
+        sim = self.simulator(w, recharge_rate=5.0)
+        sim.step({'0': order(ObjectiveType.RETURN_TO_BASE)})
+        self.assertEqual(w.drones['0'].battery, 24.0)
+        sim.step({'0': order(ObjectiveType.SEARCH_SECTOR, sector_id='0')})
+        self.assertNotEqual(w.drones['0'].position, w.base_position)
+        self.assertEqual(w.drones['0'].battery, 23.0)
+
     def test_target_archive_survives_rescue_and_expiry(self):
         w = world()
         w.target_count = 3
@@ -48,12 +173,12 @@ class WorldSimulationTest(unittest.TestCase):
         for position in original.values():
             self.assertEqual(w.check_for_target(position), Terrain.EMPTY)
 
-    def simulator(self, w):
+    def simulator(self, w, recharge_rate=0.0):
         scenario = Scenario(
             (max(s.bounds[1][0] for s in w.sectors) + 1,
              max(s.bounds[1][1] for s in w.sectors) + 1),
             len(w.sectors), w.target_count, Difficulty.MEDIUM, len(w.drones),
-            w.base_position, {}, w.sectors[0].weather,
+            w.base_position, {}, w.sectors[0].weather, recharge_rate,
         )
         weather = patch.object(w, 'update_sector_weather')
         weather.start()
@@ -75,7 +200,7 @@ class WorldSimulationTest(unittest.TestCase):
     def test_generated_world_runs_with_shared_nondefault_base(self):
         random.seed(17)
         scenario = Scenario((25, 20), 4, 12, Difficulty.MEDIUM, 3,
-                            (12, 10), {}, Weather.CLOUDY)
+                            (12, 10), {}, Weather.CLOUDY, recharge_rate=5.0)
         w = generate_world(scenario)
         sim = Simulator(w, scenario)
         sim.step({drone_id: order(ObjectiveType.SEARCH_SECTOR, drone_id, sector_id=str(i))
@@ -94,7 +219,8 @@ class WorldSimulationTest(unittest.TestCase):
                              Weather.BLIZZARD, population_rate=0)
         w = World([start, destination], 0, [], [], {'0': drone()})
         sim = self.simulator(w)
-        sim.step({'0': order(ObjectiveType.SEARCH_SECTOR, sector_id='end')})
+        with patch('src.simulator.random.random', return_value=0.99):
+            sim.step({'0': order(ObjectiveType.SEARCH_SECTOR, sector_id='end')})
         self.assertEqual(w.drones['0'].position, (0, 1))
         self.assertEqual(w.drones['0'].battery, 17.5)
         self.assertEqual(sim.explored_cells, {(0, 0), (0, 1)})
@@ -140,7 +266,7 @@ class WorldSimulationTest(unittest.TestCase):
         scenario = Scenario((5, 7), 1, 0, Difficulty.MEDIUM, 1, (0, 0),
                             {1: (IncidentType.NEW_NO_FLY_ZONE,
                                  'New no-fly zone added: rows 0-0, columns 2-2')},
-                            Weather.CLOUDY)
+                            Weather.CLOUDY, recharge_rate=5.0)
         sim = Simulator(w, scenario)
         with patch.object(w, 'update_sector_weather') as weather:
             sim.step({'0': order(ObjectiveType.RETURN_TO_BASE)})

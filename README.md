@@ -11,7 +11,7 @@ from src.simulator import Simulator
 scenario = Scenario(
     world_size=(25, 25), num_sectors=4, num_targets=12,
     difficulty=Difficulty.MEDIUM, num_drones=3, base_position=(0, 0),
-    events={}, weather=Weather.CLOUDY,
+    events={}, weather=Weather.CLOUDY, recharge_rate=5.0,
 )
 simulator = Simulator(generate_world(scenario), scenario)
 events = simulator.step({
@@ -30,7 +30,17 @@ use those IDs with `GOTO` orders. Reaching a target records a rescue in
 `simulator.world`; remaining targets can expire each turn. Sensing uses sector
 visibility and weather, and movement uses the destination sector's battery cost.
 The scenario supplies incidents and weather transitions each turn.
+Weather drifts toward an equal blend of the scenario level and the average
+weather of sectors sharing an edge. Neighbour averages use the pre-update
+weather snapshot; isolated sectors drift toward the scenario level alone.
+Shared-edge neighbours are cached when the world is created, including partial
+edge overlaps in T-junctions and staggered sector layouts.
 All drones can share `world.base_position`.
+Drones ending a turn at base gain `scenario.recharge_rate` battery units,
+up to 100.0, including drones that have exhausted their battery.
+Each powered drone outside base has a 1% chance per turn of a communications
+failure in stormy weather, or 2% in blizzards, including while holding position.
+Failures are reported by periodic monitoring.
 
 The older mission orchestration below still uses the previous simulator API and
 needs migration before it can run with this simulator.
