@@ -2,6 +2,7 @@ from heapq import heappop, heappush
 from dataclasses import dataclass
 
 from src.models import Terrain
+from src.utilities import points_in_bounds
 
 
 @dataclass(frozen=True)
@@ -26,8 +27,16 @@ def astar(
     start/end returns [].
     """
     blocked = {Terrain.OBSTACLE, Terrain.NO_FLY_ZONE, Terrain.DRONE}
-    for row, col in (start, end):
-        if not (0 <= row < len(terrain_map) and 0 <= col < len(terrain_map[row])):
+    row_bounds = {
+        row: ((0, 0), (len(terrain_map) - 1, len(cells) - 1))
+        for row, cells in enumerate(terrain_map)
+    }
+
+    def in_map(point: tuple[int, int]) -> bool:
+        return points_in_bounds((point,), row_bounds.get(point[0], ((0, 0), (-1, -1))))
+
+    for point in (start, end):
+        if not in_map(point):
             raise ValueError("Start and end must be within the terrain map")
     if start == end:
         return []
@@ -67,8 +76,7 @@ def astar(
             nr, nc = row + dr, col + dc
             neighbor = (nr, nc)
             if (
-                0 <= nr < len(terrain_map)
-                and 0 <= nc < len(terrain_map[nr])
+                in_map(neighbor)
                 and not is_blocked(neighbor)
                 and next_cost < costs.get(neighbor, float("inf"))
             ):

@@ -49,8 +49,8 @@ class WatchTest(unittest.TestCase):
         with patch('random.random', side_effect=AssertionError('Simulator RNG consumed')):
             risk = forecast_weather_risk(self.world, Weather.BLIZZARD, 's', 1)
             repeated = forecast_weather_risk(self.world, Weather.BLIZZARD, 's', 1)
-        # One step can worsen from foggy to stormy with probability 0.2.
-        self.assertAlmostEqual(risk, 0.2)
+        # One step can worsen from foggy to stormy with probability 0.03.
+        self.assertAlmostEqual(risk, 0.03)
         self.assertEqual(risk, repeated)
         self.assertEqual(self.world.sectors[0].weather, Weather.FOGGY)
         neighbour = Sector('neighbour', ((5, 0), (5, 4)), 2, 1, 0, Weather.BLIZZARD, 0)
@@ -362,7 +362,7 @@ class SimulatorWatchTest(unittest.TestCase):
         simulator = self.simulator([predicate])
         with patch('src.simulator.random.random', return_value=0.99):
             simulator.step({'d': Objective(drone_id='d', objective_type=ObjectiveType.RETURN_TO_BASE)})
-        self.assertEqual(simulator.watch_context().baseline_route_costs['d'], 3)
+        self.assertEqual(simulator.watch_context().baseline_route_costs['d'], 2.4)
         self.assertFalse(simulator.triggered_watches)
         simulator.world.sectors[0].movement_cost = 5
         # A held order avoids consuming the final move before checking its cost.

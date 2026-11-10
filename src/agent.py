@@ -1,52 +1,65 @@
-from src.models import Agent, AgentType, MissionPlan, MissionState, MonitoringPlan, Plan, ReviewOutcome, ReviewResult
-from src.mission_updates import update_completed_sectors, update_discovered_targets
-from src.policy import (
+from src.models import (
+    Agent,
     CommanderRoutingDecision,
     FleetMonitorObservation,
-    FleetMonitorPolicy,
-    NaiveFleetMonitorPolicy,
-    NaiveMissionCommanderPolicy,
-    NaiveMissionPlannerPolicy,
-    NaiveSafetyReviewerPolicy,
     Policy,
+    ToolRegistry,
+    AgentType,
+    MissionPlan,
+    MissionState,
+    MonitoringPlan,
+    Plan,
+    ReviewOutcome,
+    ReviewResult,
 )
+from src.mission_updates import update_completed_sectors, update_discovered_targets
+
 
 
 class FleetMonitor(Agent):
-    def __init__(self, policy: FleetMonitorPolicy | None = None):
-        self.policy = policy if policy is not None else NaiveFleetMonitorPolicy()
+    def __init__(self, policy: Policy[MonitoringPlan]):
+        self.policy = policy
 
-    def run(self, state: MissionState) -> dict:
+    def run(self, state: MissionState, *, tools: ToolRegistry | None = None) -> dict:
         if state.current_plan is None or state.needs_replan:
             raise ValueError("FleetMonitor requires an accepted plan")
-        result = self.policy.evaluate(FleetMonitorObservation(
-            accepted_plan=state.current_plan.model_copy(deep=True),
-            step=state.step,
-            safety_review=state.safety_status.model_copy(deep=True) if state.safety_status else None,
-        ))
+        result = self.policy.evaluate(
+            FleetMonitorObservation(
+                accepted_plan=state.current_plan.model_copy(deep=True),
+                step=state.step,
+                review=(
+                    state.review_status.model_copy(deep=True)
+                    if state.review_status
+                    else None
+                ),
+            ),
+            tools=tools,
+        )
         if not isinstance(result, MonitoringPlan):
             raise TypeError("Fleet monitor policy must return a MonitoringPlan")
         monitoring_plan = MonitoringPlan.model_validate(result.model_dump())
         return {"monitoring_plan": monitoring_plan}
 
 
-
 class MissionCommander(Agent):
-    def __init__(self, policy: Policy[CommanderRoutingDecision] | None = None):
-        self.policy = policy if policy is not None else NaiveMissionCommanderPolicy()
+    def __init__(self, policy: Policy[CommanderRoutingDecision]):
+        self.policy = policy
 
-    def run(self, state: MissionState) -> dict:
-        observed = state.model_copy(update={
-            "discovered_targets": dict(state.discovered_targets),
-            "completed_sectors": set(state.completed_sectors),
-        })
+    def run(self, state: MissionState, *, tools: ToolRegistry | None = None) -> dict:
+        observed = state.model_copy(
+            update={
+                "discovered_targets": dict(state.discovered_targets),
+                "completed_sectors": set(state.completed_sectors),
+            }
+        )
         previous_targets = set(state.discovered_targets)
         update_discovered_targets(observed)
         update_completed_sectors(observed)
         observed.new_target_ids = set(observed.discovered_targets) - previous_targets
-        decision = self.policy.evaluate(observed)
+        decision = self.policy.evaluate(observed, tools=tools)
         update = {
-            "next_agent": decision.next_agent, "under_review": decision.under_review,
+            "next_agent": decision.next_agent,
+            "under_review": decision.under_review,
             "mission_status": decision.mission_status,
             "needs_replan": decision.needs_replan,
             "commander_rethink": decision.commander_rethink,
@@ -56,8 +69,8 @@ class MissionCommander(Agent):
                 update[field] = getattr(observed, field)
         if decision.next_agent == AgentType.MISSION_PLANNER:
             update["proposed_plans"] = []
-        elif decision.next_agent == AgentType.SAFETY_REVIEWER:
-            update.update({"safety_status": None, "human_approval": None})
+        elif decision.next_agent == AgentType.REVIEWER:
+            update.update({"review_status": None, "human_approval": None})
         elif decision.next_agent == "human_reviewer":
             update["under_review"] = decision.under_review or state.under_review
             update["human_approval"] = None
@@ -65,21 +78,27 @@ class MissionCommander(Agent):
 
 
 class MissionPlanner(Agent):
-    def __init__(self, policy: Policy[list[Plan]] | None = None):
-        self.policy = policy if policy is not None else NaiveMissionPlannerPolicy()
+    def __init__(self, policy: Policy[list[Plan]]):
+        self.policy = policy
 
-    def run(self, state: MissionState) -> dict:
-        proposals = self.policy.evaluate(state)
-        return {"proposed_plans": proposals, "safety_status": None, "human_approval": None}
+    def run(self, state: MissionState, *, tools: ToolRegistry | None = None) -> dict:
+        proposals = self.policy.evaluate(state, tools=tools)
+        return {
+            "proposed_plans": proposals,
+            "review_status": None,
+            "human_approval": None,
+        }
 
 
-class SafetyReviewer(Agent):
-    def __init__(self, policy: Policy[ReviewResult] | None = None):
-        self.policy = policy if policy is not None else NaiveSafetyReviewerPolicy()
+class Reviewer(Agent):
+    """Review the commander's priorities, proposed plan, and any decision to retain it."""
 
-    def run(self, state: MissionState) -> dict:
-        outcome = self.policy.evaluate(state)
-        update: dict = {"safety_status": outcome}
+    def __init__(self, policy: Policy[ReviewResult]):
+        self.policy = policy
+
+    def run(self, state: MissionState, *, tools: ToolRegistry | None = None) -> dict:
+        outcome = self.policy.evaluate(state, tools=tools)
+        update: dict = {"review_status": outcome}
         if outcome.outcome == ReviewOutcome.APPROVE:
             if state.under_review is None:
                 raise ValueError("No proposed plan selected for approval")

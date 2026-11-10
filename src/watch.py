@@ -107,7 +107,7 @@ def estimate_route_cost(world: World, drone_id: str, destination: Point) -> floa
         sector = world.sector_at(position)
         if sector is None:
             return None
-        cost -= sector.move(0.0)
+        cost -= sector.move((dx, dy), 0.0)
     return cost
 
 

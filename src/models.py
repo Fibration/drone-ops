@@ -1,5 +1,9 @@
+from dataclasses import dataclass
+
 from pydantic import BaseModel, ConfigDict, Field
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol, TypeVar
+from collections.abc import Mapping
+from langchain_core.tools import BaseTool
 from enum import Enum, auto
 
 
@@ -70,11 +74,11 @@ class AgentType(str, Enum):
     FLEET_MONITOR = "FLEET_MONITOR"
     MISSION_COMMANDER = "MISSION_COMMANDER"
     MISSION_PLANNER = "MISSION_PLANNER"
-    SAFETY_REVIEWER = "SAFETY_REVIEWER"
+    REVIEWER = "REVIEWER"
 
 
 # class CommanderDecision(BaseModel):
-#     next_agent: Literal["fleet_monitor", "mission_planner", "safety_reviewer", "finish"]
+#     next_agent: Literal["fleet_monitor", "mission_planner", "reviewer", "finish"]
 #     objective: str
 
 
@@ -83,7 +87,7 @@ class CommanderDecision(BaseModel):
     reason: str
 
 
-class SafetyDecision(BaseModel):
+class ReviewerDecision(BaseModel):
     outcome: Literal["approve", "revise", "human_approval"]
     violations: list[str]
 
@@ -131,6 +135,7 @@ class WatchPredicate(BaseModel):
 
 class WatchAlert(BaseModel):
     """One selected-watch or free-watch trigger, with its affected entity."""
+
     model_config = ConfigDict(extra="forbid")
 
     type: WatchType | FreeWatchType
@@ -187,7 +192,7 @@ class MissionState(BaseModel):
     needs_replan: bool = True
 
     next_agent: AgentType | Literal["human_reviewer"] | None
-    safety_status: ReviewResult | None
+    review_status: ReviewResult | None
     commander_rethink: CommanderReviewOutcome | None = None
     human_approval: bool | None
 
@@ -196,10 +201,87 @@ class MissionState(BaseModel):
 
 
 class Agent(Protocol):
-    def run(self, state: MissionState) -> dict: ...
+    def run(
+        self, state: MissionState, *, tools: "ToolRegistry | None" = None
+    ) -> dict: ...
 
 
 class CommanderObservation(BaseModel):
     mission_state: MissionState
     world: list[list[Terrain]]
     sectors: dict[str, Sector]
+
+
+class Tool(Enum):
+    ESTIMATE_SECTOR_POPULATION = "ESTIMATE_SECTOR_POPULATION"
+    GET_FLEET_STATUS = "GET_FLEET_STATUS"
+    GET_SECTOR_STATUS = "GET_SECTOR_STATUS"
+    GET_ACTIVE_TARGETS = "GET_ACTIVE_TARGETS"
+    GET_WEATHER_FORECAST = "GET_WEATHER_FORECAST"
+    PLAN_ROUTE = "PLAN_ROUTE"
+    ESTIMATE_ROUTE_COST = "ESTIMATE_ROUTE_COST"
+    EVALUATE_CANDIDATE_PLAN = "EVALUATE_CANDIDATE_PLAN"
+    STRESS_TEST_PLAN = "STRESS_TEST_PLAN"
+
+
+class ToolObservation(Enum):
+    NAVIGATION_MAP = "navigation_map"
+    DRONE_POSITIONS = "drone_positions"
+    DRONE_BATTERIES = "drone_batteries"
+    STEP = "step"
+    BASE_POSITION = "base_position"
+    DRONE_IDS = "drone_ids"
+    KNOWN_TARGETS = "known_targets"
+    ACQUIRED_TARGETS = "acquired_targets"
+    EXPLORED_CELLS = "explored_cells"
+    COMPLETED_SECTORS = "completed_sectors"
+    SECTOR_BOUNDS = "sector_bounds"
+    WEATHER = "weather"
+    MOVEMENT_COSTS = "movement_costs"
+    POPULATION_ESTIMATES = "population_estimates"
+
+
+type ToolObservationDict = dict[ToolObservation, Any]
+
+
+class ToolService(Protocol):
+    def call(
+        self, tool: Tool, arguments: dict, observation: ToolObservationDict
+    ) -> dict: ...
+
+
+type ToolRegistry = Mapping[Tool, BaseTool]
+
+
+class ToolProvider(Protocol):
+    def for_role(self, role: AgentType) -> ToolRegistry: ...
+
+
+@dataclass(frozen=True)
+class AgentContext:
+    tools: ToolProvider
+
+
+@dataclass(frozen=True)
+class CommanderRoutingDecision:
+    next_agent: AgentType | Literal["human_reviewer"] | None
+    under_review: Plan | None = None
+    mission_status: MissionStatus = MissionStatus.ONGOING
+    needs_replan: bool = True
+    commander_rethink: CommanderReviewOutcome | None = None
+
+
+@dataclass(frozen=True)
+class FleetMonitorObservation:
+    accepted_plan: MissionPlan
+    step: int
+    review: ReviewResult | None = None
+
+
+Result = TypeVar("Result", covariant=True)
+
+
+class Policy(Protocol[Result]):
+    def evaluate(
+        self, observation: Any, *, tools: ToolRegistry | None = None
+    ) -> Result: ...

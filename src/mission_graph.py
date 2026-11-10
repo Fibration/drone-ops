@@ -1,11 +1,13 @@
-from collections.abc import Mapping
-from typing import Any, Literal, Protocol
+from collections.abc import Callable, Mapping
+from typing import Any, Literal
 
 from langgraph.graph import START, END, StateGraph
+from langgraph.runtime import Runtime
 
-from src.agent import FleetMonitor, MissionCommander, MissionPlanner, SafetyReviewer
-from src.policy import FleetMonitorPolicy
 from src.models import (
+    AgentContext,
+    ToolRegistry,
+    Agent,
     AgentType,
     MissionPlan,
     MissionState,
@@ -18,31 +20,24 @@ NodeName = AgentType | Literal["human_reviewer"]
 StateUpdate = dict[str, Any]
 
 
-class NodeHandler(Protocol):
-    def __call__(self, state: MissionState) -> StateUpdate: ...
+NodeHandler = Callable[..., StateUpdate]
 
 
-def fleet_monitor(state: MissionState) -> StateUpdate:
-    return FleetMonitor().run(state)
+def _role_tools(runtime: Runtime[AgentContext], role: AgentType) -> ToolRegistry | None:
+    return runtime.context.tools.for_role(role) if runtime.context else None
 
 
-def mission_commander(state: MissionState) -> StateUpdate:
-    return MissionCommander().run(state)
-
-
-def mission_planner(state: MissionState) -> StateUpdate:
-    return MissionPlanner().run(state)
-
-
-def safety_reviewer(state: MissionState) -> StateUpdate:
-    return SafetyReviewer().run(state)
+def _agent_handler(role: AgentType, agent: Agent) -> NodeHandler:
+    def run(state: MissionState, runtime: Runtime[AgentContext]) -> StateUpdate:
+        return agent.run(state, tools=_role_tools(runtime, role))
+    return run
 
 
 def human_reviewer(state: MissionState) -> StateUpdate:
     assert state.under_review is not None
     human_decision = input(
         f"Plan: {state.under_review.model_dump()}\n"
-        f"Safety review: {state.safety_status}\n"
+        f"Review: {state.review_status}\n"
         f"Commander assessment: {state.commander_rethink}\nApprove [y/n]?"
     )
     if human_decision == "y":
@@ -61,27 +56,25 @@ def human_reviewer(state: MissionState) -> StateUpdate:
 def route_commander(state: MissionState) -> str:
     if state.mission_status != MissionStatus.ONGOING:
         return END
-    if not state.needs_replan and state.current_plan is not None:
-        return AgentType.FLEET_MONITOR
     destination = state.next_agent
     if destination is None or destination not in {
         AgentType.MISSION_PLANNER,
-        AgentType.SAFETY_REVIEWER,
+        AgentType.REVIEWER,
         HUMAN_REVIEW_NODE,
     }:
         raise ValueError(f"Invalid commander destination: {destination!r}")
     return destination
 
 
-def route_safety_review(state: MissionState) -> str:
+def route_review(state: MissionState) -> str:
     routes: dict[str, str] = {
         ReviewOutcome.APPROVE: AgentType.FLEET_MONITOR,
         ReviewOutcome.REPLAN: AgentType.MISSION_COMMANDER,
         ReviewOutcome.RECONSIDER_PRIORITY: AgentType.MISSION_COMMANDER,
     }
-    outcome = state.safety_status
+    outcome = state.review_status
     if outcome is None or outcome.outcome not in routes:
-        raise ValueError(f"Invalid safety review outcome: {outcome!r}")
+        raise ValueError(f"Invalid review outcome: {outcome!r}")
     return routes[outcome.outcome]
 
 
@@ -96,23 +89,26 @@ def route_human_review(state: MissionState) -> str:
 def build_mission_graph(
     nodes: Mapping[NodeName, NodeHandler] | None = None,
     *,
-    fleet_monitor_policy: FleetMonitorPolicy | None = None,
-) -> StateGraph[MissionState]:
-    """Build the README workflow, optionally supplying concrete node handlers."""
-    handlers: dict[NodeName, NodeHandler] = {
-        AgentType.FLEET_MONITOR: FleetMonitor(policy=fleet_monitor_policy).run,
-        AgentType.MISSION_COMMANDER: mission_commander,
-        AgentType.MISSION_PLANNER: mission_planner,
-        AgentType.SAFETY_REVIEWER: safety_reviewer,
-        HUMAN_REVIEW_NODE: human_reviewer,
-    }
+    agents: Mapping[AgentType, Agent] | None = None,
+) -> StateGraph[MissionState, AgentContext]:
+    """Build the workflow with optional agent instances and overriding node handlers."""
+    handlers: dict[NodeName, NodeHandler] = {HUMAN_REVIEW_NODE: human_reviewer}
+    if agents is not None:
+        for role, agent in agents.items():
+            if role not in AgentType:
+                raise ValueError(f'Unknown agent role: {role!r}')
+            handlers[role] = _agent_handler(role, agent)
     if nodes is not None:
-        unknown = nodes.keys() - handlers.keys()
+        unknown = nodes.keys() - (set(AgentType) | {HUMAN_REVIEW_NODE})
         if unknown:
             raise ValueError(f"Unknown mission graph nodes: {sorted(unknown)}")
         handlers.update(nodes)
 
-    builder = StateGraph(MissionState)
+    missing = set(AgentType) - handlers.keys()
+    if missing:
+        raise ValueError(f"Configure an agent or node handler for every role; missing: {sorted(missing)}")
+
+    builder = StateGraph(MissionState, context_schema=AgentContext)
     for name, handler in handlers.items():
         builder.add_node(name.value if isinstance(name, AgentType) else name, handler)
     builder.add_edge(START, AgentType.MISSION_COMMANDER.value)
@@ -120,36 +116,34 @@ def build_mission_graph(
         AgentType.MISSION_COMMANDER.value,
         route_commander,
         {
-            AgentType.FLEET_MONITOR: AgentType.FLEET_MONITOR.value,
-            AgentType.MISSION_PLANNER: AgentType.MISSION_PLANNER.value,
-            AgentType.SAFETY_REVIEWER: AgentType.SAFETY_REVIEWER.value,
+            AgentType.MISSION_PLANNER.value: AgentType.MISSION_PLANNER.value,
+            AgentType.REVIEWER.value: AgentType.REVIEWER.value,
             HUMAN_REVIEW_NODE: HUMAN_REVIEW_NODE,
             END: END,
         },
     )
     builder.add_edge(AgentType.MISSION_PLANNER.value, AgentType.MISSION_COMMANDER.value)
     builder.add_conditional_edges(
-        AgentType.SAFETY_REVIEWER.value,
-        route_safety_review,
+        AgentType.REVIEWER.value,
+        route_review,
         {
-            AgentType.FLEET_MONITOR: AgentType.FLEET_MONITOR.value,
-            AgentType.MISSION_COMMANDER: AgentType.MISSION_COMMANDER.value,
+            AgentType.FLEET_MONITOR.value: AgentType.FLEET_MONITOR.value,
+            AgentType.MISSION_COMMANDER.value: AgentType.MISSION_COMMANDER.value,
         },
     )
     builder.add_conditional_edges(
         HUMAN_REVIEW_NODE,
         route_human_review,
         {
-            AgentType.FLEET_MONITOR: AgentType.FLEET_MONITOR.value,
-            AgentType.MISSION_COMMANDER: AgentType.MISSION_COMMANDER.value,
+            AgentType.FLEET_MONITOR.value: AgentType.FLEET_MONITOR.value,
+            AgentType.MISSION_COMMANDER.value: AgentType.MISSION_COMMANDER.value,
         },
     )
     builder.add_edge(AgentType.FLEET_MONITOR.value, END)
     return builder
 
 
-graph = build_mission_graph().compile()
-
-
 if __name__ == "__main__":
-    print(f"```mermaid\n{graph.get_graph().draw_mermaid().strip()}\n```")
+    # Rendering topology does not require concrete decision policies.
+    graph = build_mission_graph(nodes={role: lambda state: {} for role in AgentType}).compile()
+    print(f"```mermaid\n{graph.get_graph().draw_mermaid(with_styles=False).strip()}\n```")

@@ -30,6 +30,25 @@ def add_target(w, position):
 
 
 class WorldSimulationTest(unittest.TestCase):
+    def test_wind_cost_matches_route_estimate_and_simulated_move(self):
+        from src.parameters import wind_penalty
+        from src.watch import estimate_route_cost
+
+        for wind, expected in (
+            ((0, 1), 1 - wind_penalty),
+            ((0, -1), 1 + wind_penalty),
+            ((1, 0), 1.0),
+        ):
+            with self.subTest(wind=wind):
+                w = world()
+                w.sectors[0].wind_direction = wind
+                self.assertAlmostEqual(estimate_route_cost(w, '0', (0, 1)), expected)
+                sim = self.simulator(w)
+                with patch('src.simulator.random.random', return_value=0.99):
+                    sim.step({'0': order(ObjectiveType.SEARCH_SECTOR, sector_id='0')})
+                self.assertEqual(w.drones['0'].position, (0, 1))
+                self.assertAlmostEqual(w.drones['0'].battery, 20 - expected)
+
     def test_cached_neighbours_handle_staggered_three_two_three_layout(self):
         bounds = [((0, 0), (1, 1)), ((0, 2), (1, 3)), ((0, 4), (1, 5)),
                   ((2, 0), (3, 2)), ((2, 3), (3, 5)),
@@ -54,7 +73,7 @@ class WorldSimulationTest(unittest.TestCase):
             if reverse:
                 sectors.reverse()
             w = World(sectors, 0, [], [], {})
-            rolls = {'0': 0.15, '1': 0.25, '2': 0.9}
+            rolls = {'0': 0.025, '1': 0.045, '2': 0.9}
             with patch('src.scenario.random.random',
                        side_effect=[rolls[s.sector_id] for s in sectors]):
                 w.update_sector_weather(Weather.CLEAR)
@@ -72,13 +91,13 @@ class WorldSimulationTest(unittest.TestCase):
                        # A diagonal sector must not influence sector 0.
                        Sector('2', ((1, 1), (1, 1)), 2, 1, 0, Weather.BLIZZARD, 0)]
             w = World(sectors, 0, [], [], {})
-            with patch('src.scenario.random.random', return_value=0.25):
+            with patch('src.scenario.random.random', return_value=0.045):
                 w.update_sector_weather(scenario_weather)
             self.assertEqual(sectors[0].weather, current)
 
     def test_isolated_sector_weather_falls_back_to_scenario(self):
         w = world(weather=Weather.CLOUDY)
-        with patch('src.scenario.random.random', return_value=0.25):
+        with patch('src.scenario.random.random', return_value=0.045):
             w.update_sector_weather(Weather.BLIZZARD)
         self.assertEqual(w.sectors[0].weather, Weather.FOGGY)
 
@@ -222,7 +241,7 @@ class WorldSimulationTest(unittest.TestCase):
         with patch('src.simulator.random.random', return_value=0.99):
             sim.step({'0': order(ObjectiveType.SEARCH_SECTOR, sector_id='end')})
         self.assertEqual(w.drones['0'].position, (0, 1))
-        self.assertEqual(w.drones['0'].battery, 17.5)
+        self.assertEqual(w.drones['0'].battery, 17.9)
         self.assertEqual(sim.explored_cells, {(0, 0), (0, 1)})
 
     def test_rescue_on_last_battery_move_is_recorded_before_decay(self):

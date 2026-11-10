@@ -6,6 +6,8 @@ from math import ceil, floor, sqrt
 
 from src.models import Terrain
 from src.models import DroneState, IncidentType, Point
+from src.utilities import points_in_bounds
+from src.parameters import wind_penalty
 
 
 class Difficulty(Enum):
@@ -23,15 +25,19 @@ class Weather(Enum):
     BLIZZARD = 4
 
 
-def weather_transition_probabilities(current: int, desired: float) -> tuple[float, float]:
-    improve_probability = 0.2 if current > desired else 0.1
-    worsen_probability = 0.2 if current < desired else 0.1
+def weather_transition_probabilities(
+    current: int, desired: float
+) -> tuple[float, float]:
+    improve_probability = 0.03 if current > desired else 0.02
+    worsen_probability = 0.03 if current < desired else 0.02
     return improve_probability, worsen_probability
 
 
 def next_weather_level(current: int, desired: float, transition: float) -> int:
     """One persistence-biased weather transition, shared with forecasts."""
-    improve_probability, worsen_probability = weather_transition_probabilities(current, desired)
+    improve_probability, worsen_probability = weather_transition_probabilities(
+        current, desired
+    )
     if transition < improve_probability:
         return max(Weather.CLEAR.value, current - 1)
     if transition < improve_probability + worsen_probability:
@@ -49,31 +55,36 @@ class Sector:
         decay_rate: float,
         weather: Weather,
         population_rate: float | None = None,
+        wind_direction: tuple[int, int] = (0, 0),
     ):
         self.sector_id = sector_id
         self.bounds = bounds
         self.visibility = visibility
         self.movement_cost = movement_cost
         self.weather = weather
+        self.wind_direction = wind_direction
         self.decay_rate = decay_rate
         self.population_rate = (
             population_rate if population_rate is not None else 1 / decay_rate
         )
 
-    def move(self, battery: float) -> float:
+    def move(self, direction: tuple[int, int], battery: float) -> float:
         weather_penalty = {
-            Weather.STORMY: 0.5,
-            Weather.BLIZZARD: 1.0,
+            Weather.STORMY: 0.2,
+            Weather.BLIZZARD: 0.4,
         }.get(self.weather, 0.0)
-        return battery - self.movement_cost - weather_penalty
+        wind_adjustment = 0.0
+        if self.wind_direction != (0, 0) and direction == self.wind_direction:
+            wind_adjustment = -wind_penalty
+        elif self.wind_direction != (0, 0) and direction == (-self.wind_direction[0], -self.wind_direction[1]):
+            wind_adjustment = wind_penalty
+        movement_cost = (
+            self.movement_cost * (1 + weather_penalty) * (1 + wind_adjustment)
+        )
+        return battery - movement_cost
 
     def in_sector(self, cell: Point) -> bool:
-        return (
-            cell[0] >= self.bounds[0][0]
-            and cell[0] <= self.bounds[1][0]
-            and cell[1] >= self.bounds[0][1]
-            and cell[1] <= self.bounds[1][1]
-        )
+        return points_in_bounds((cell,), self.bounds)
 
     def visible_cells(self, cell: Point) -> set[Point]:
         # Return all the cells within the euclidean distance of the provided
@@ -154,19 +165,18 @@ class World:
         neighbours: dict[str, list[str]] = {s.sector_id: [] for s in self.sectors}
         for index, sector in enumerate(self.sectors):
             (x0, y0), (x1, y1) = sector.bounds
-            for other in self.sectors[index + 1:]:
+            for other in self.sectors[index + 1 :]:
                 (ox0, oy0), (ox1, oy1) = other.bounds
                 if (
-                    ((x1 + 1 == ox0 or ox1 + 1 == x0)
-                     and max(y0, oy0) <= min(y1, oy1))
-                    or ((y1 + 1 == oy0 or oy1 + 1 == y0)
-                        and max(x0, ox0) <= min(x1, ox1))
+                    (x1 + 1 == ox0 or ox1 + 1 == x0) and max(y0, oy0) <= min(y1, oy1)
+                ) or (
+                    (y1 + 1 == oy0 or oy1 + 1 == y0) and max(x0, ox0) <= min(x1, ox1)
                 ):
                     neighbours[sector.sector_id].append(other.sector_id)
                     neighbours[other.sector_id].append(sector.sector_id)
         return {sector_id: tuple(ids) for sector_id, ids in neighbours.items()}
 
-    def navigation_map(self, drone_id: str) -> list[list[Terrain]]:
+    def navigation_map(self, drone_id: str | None) -> list[list[Terrain]]:
         """Terrain for routing, with the shared base open to returning drones."""
         width = max(sector.bounds[1][0] for sector in self.sectors) + 1
         height = max(sector.bounds[1][1] for sector in self.sectors) + 1
@@ -291,15 +301,20 @@ class World:
     def update_sector_weather(self, scenario_weather: Weather):
         levels = {sector.sector_id: sector.weather.value for sector in self.sectors}
         neighbour_averages = {
-            sector_id: (sum(levels[neighbour] for neighbour in neighbours) / len(neighbours)
-                        if neighbours else scenario_weather.value)
+            sector_id: (
+                sum(levels[neighbour] for neighbour in neighbours) / len(neighbours)
+                if neighbours
+                else scenario_weather.value
+            )
             for sector_id, neighbours in self.sector_neighbours.items()
         }
         for sector in self.sectors:
             current = levels[sector.sector_id]
             neighbour_average = neighbour_averages[sector.sector_id]
             desired = 0.5 * scenario_weather.value + 0.5 * neighbour_average
-            sector.weather = Weather(next_weather_level(current, desired, random.random()))
+            sector.weather = Weather(
+                next_weather_level(current, desired, random.random())
+            )
 
 
 @dataclass(frozen=True)
@@ -313,6 +328,7 @@ class Scenario:
     events: dict[int, tuple[IncidentType, str]]
     weather: Weather
     recharge_rate: float
+    wind_direction: tuple[int, int] = (0, 0)
 
 
 def generate_world(scenario: Scenario) -> World:
@@ -324,7 +340,9 @@ def generate_world(scenario: Scenario) -> World:
     if scenario.num_targets < 0 or scenario.num_drones < 0:
         raise ValueError("Target and drone counts must be nonnegative")
     base_x, base_y = scenario.base_position
-    if not (0 <= base_x < width and 0 <= base_y < height):
+    if not points_in_bounds(
+        (scenario.base_position,), ((0, 0), (width - 1, height - 1))
+    ):
         raise ValueError("Base position must be within the world")
     if scenario.num_targets > width * height - 1:
         raise ValueError("Not enough cells to place targets outside the base")
@@ -361,6 +379,7 @@ def generate_world(scenario: Scenario) -> World:
                 )
             ),
             population_rate=4.0,
+            wind_direction=scenario.wind_direction,
         )
         for index, sector_bounds in enumerate(bounds)
     ]
