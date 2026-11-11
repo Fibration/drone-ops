@@ -16,7 +16,16 @@ with a simulator dispatcher.
 The agents run on a LangGraph graph where the mission commander acts as a high level
 posture setter and a router.
 All inputs and outputs for agents are TypedDicts as guardrails.
-A disagreement between the mission commander and reviewer results in human review.
+
+- The mission commander sets priorities and delegates to the mission planner
+- The mission planner produces up to 2 plans based on priorities
+- The mission commander selects one of the returned plans
+- The reviewer evaluates the appropriateness of the priorities, and stress tests the selected plan
+- The commander has an opportunity to redirect to the mission planner in the case of an 
+unfavourable review
+- A disagreement between the mission commander and reviewer results in human review
+- The fleet monitor decides what to monitor based on the plan which would next wake
+the agent team
 
 Each agent acts using a policy.
 This repo provides OpenAI LLM policies as well as naive heuristic policies.
