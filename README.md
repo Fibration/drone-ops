@@ -38,3 +38,5 @@ graph TD;
 
 A world builder utility which can generate a random world from a scenario card
 can be found in `scenario.py`.
+
+Running OpenAI agents requires a `.env` file with `OPENAI_API_KEY=""`.
